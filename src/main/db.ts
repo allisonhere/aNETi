@@ -1,6 +1,6 @@
-import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { createRequire } from 'node:module';
 
 export type DeviceRecord = {
   id: string;
@@ -24,8 +24,45 @@ export type AlertRecord = {
 };
 
 export const createDatabase = (dbPath: string) => {
+  const require = createRequire(import.meta.url);
+  let Sqlite: any = null;
+
+  try {
+    Sqlite = require('better-sqlite3');
+  } catch (error) {
+    console.warn('better-sqlite3 not available, using in-memory store.', error);
+  }
+
+  if (!Sqlite) {
+    const deviceMap = new Map<string, DeviceRecord>();
+    const alerts: AlertRecord[] = [];
+    let alertId = 1;
+
+    const syncDevices = (devices: DeviceRecord[]) => {
+      for (const device of devices) {
+        deviceMap.set(device.id, { ...device });
+      }
+    };
+
+    const listDevices = () => Array.from(deviceMap.values()).sort((a, b) => b.lastSeen - a.lastSeen);
+
+    const addAlert = (alert: Omit<AlertRecord, 'id'>) => {
+      alerts.unshift({ ...alert, id: alertId++ });
+    };
+
+    const listAlerts = (limit = 50) => alerts.slice(0, limit);
+
+    return {
+      db: null,
+      syncDevices,
+      listDevices,
+      addAlert,
+      listAlerts,
+    };
+  }
+
   mkdirSync(dirname(dbPath), { recursive: true });
-  const db = new Database(dbPath);
+  const db = new Sqlite(dbPath);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
 
