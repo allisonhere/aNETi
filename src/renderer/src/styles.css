@@ -1,0 +1,24 @@
+:root {
+  font-family: "Space Grotesk", "SF Pro Text", system-ui, -apple-system, sans-serif;
+  color-scheme: dark;
+  background-color: #070b1a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+}
+
+#root {
+  min-height: 100vh;
+}
