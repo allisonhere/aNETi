@@ -20,7 +20,7 @@ const createMainWindow = () => {
     },
   });
 
-  const devUrl = process.env.VITE_DEV_SERVER_URL;
+  const devUrl = process.env.ELECTRON_RENDERER_URL || process.env.VITE_DEV_SERVER_URL;
   if (devUrl) {
     mainWindow.loadURL(devUrl);
   } else {
