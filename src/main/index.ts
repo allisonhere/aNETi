@@ -1,9 +1,12 @@
 import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import { join } from 'node:path';
 import { createScanner } from './scanner';
+import { createDatabase } from './db';
+import type { Device } from './types';
 
 let mainWindow: BrowserWindow | null = null;
 const scanner = createScanner();
+let db: ReturnType<typeof createDatabase> | null = null;
 
 const createMainWindow = () => {
   mainWindow = new BrowserWindow({
@@ -37,16 +40,22 @@ const createMainWindow = () => {
   });
 
   scanner.onDevices((devices) => {
+    db?.syncDevices(devices as Device[]);
     mainWindow?.webContents.send('scanner:devices', devices);
   });
 };
 
 app.whenReady().then(() => {
+  const dbPath = join(app.getPath('userData'), 'aneti.sqlite');
+  db = createDatabase(dbPath);
+
   createMainWindow();
 
   ipcMain.handle('scanner:start', (_event, options) => scanner.start(options));
   ipcMain.handle('scanner:stop', () => scanner.stop());
   ipcMain.handle('scanner:list', () => scanner.list());
+  ipcMain.handle('db:devices', () => db?.listDevices() ?? []);
+  ipcMain.handle('db:alerts', (_event, limit?: number) => db?.listAlerts(limit ?? 50) ?? []);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

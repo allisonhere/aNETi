@@ -1,18 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import type { Device } from './types';
 
 export type DeviceStatus = 'online' | 'offline';
-
-export type Device = {
-  id: string;
-  ip: string;
-  mac?: string;
-  hostname?: string;
-  vendor?: string;
-  firstSeen: number;
-  lastSeen: number;
-  status: DeviceStatus;
-  latencyMs?: number;
-};
 
 type DevicesListener = (devices: Device[]) => void;
 
@@ -22,30 +11,35 @@ type ScannerOptions = {
 
 const now = () => Date.now();
 
-const seedDevices = (): Device[] => [
-  {
-    id: randomUUID(),
-    ip: '192.168.1.1',
-    mac: 'AA:BB:CC:DD:EE:01',
-    hostname: 'gateway',
-    vendor: 'NetGear',
-    firstSeen: now(),
-    lastSeen: now(),
-    status: 'online',
-    latencyMs: 2,
-  },
-  {
-    id: randomUUID(),
-    ip: '192.168.1.42',
-    mac: 'AA:BB:CC:DD:EE:42',
-    hostname: 'workstation',
-    vendor: 'Apple',
-    firstSeen: now(),
-    lastSeen: now(),
-    status: 'online',
-    latencyMs: 8,
-  },
-];
+const deviceId = (ip: string, mac?: string) => (mac ? `mac:${mac}` : `ip:${ip}`);
+
+const seedDevices = (): Device[] => {
+  const timestamp = now();
+  return [
+    {
+      id: deviceId('192.168.1.1', 'AA:BB:CC:DD:EE:01'),
+      ip: '192.168.1.1',
+      mac: 'AA:BB:CC:DD:EE:01',
+      hostname: 'gateway',
+      vendor: 'NetGear',
+      firstSeen: timestamp,
+      lastSeen: timestamp,
+      status: 'online',
+      latencyMs: 2,
+    },
+    {
+      id: deviceId('192.168.1.42', 'AA:BB:CC:DD:EE:42'),
+      ip: '192.168.1.42',
+      mac: 'AA:BB:CC:DD:EE:42',
+      hostname: 'workstation',
+      vendor: 'Apple',
+      firstSeen: timestamp,
+      lastSeen: timestamp,
+      status: 'online',
+      latencyMs: 8,
+    },
+  ];
+};
 
 export const createScanner = () => {
   let devices: Device[] = seedDevices();
@@ -72,12 +66,14 @@ export const createScanner = () => {
     });
 
     if (Math.random() > 0.75) {
+      const ip = `192.168.1.${Math.floor(Math.random() * 120) + 100}`;
+      const mac = `AA:BB:CC:DD:EE:${Math.floor(Math.random() * 90 + 10)}`;
       devices = [
         ...devices,
         {
-          id: randomUUID(),
-          ip: `192.168.1.${Math.floor(Math.random() * 120) + 100}`,
-          mac: `AA:BB:CC:DD:EE:${Math.floor(Math.random() * 90 + 10)}`,
+          id: deviceId(ip, mac),
+          ip,
+          mac,
           hostname: 'new-device',
           vendor: 'Unknown',
           firstSeen: timestamp,

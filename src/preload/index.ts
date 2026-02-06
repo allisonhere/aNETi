@@ -9,4 +9,6 @@ contextBridge.exposeInMainWorld('aneti', {
     ipcRenderer.on('scanner:devices', handler);
     return () => ipcRenderer.off('scanner:devices', handler);
   },
+  listStoredDevices: () => ipcRenderer.invoke('db:devices'),
+  listAlerts: (limit?: number) => ipcRenderer.invoke('db:alerts', limit),
 });

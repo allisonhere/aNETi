@@ -38,9 +38,19 @@ export default function App() {
   const [scanning, setScanning] = useState(false);
   const { toasts, showToast, dismissToast } = useToast();
   const knownIds = useRef(new Set<string>());
+  const hydratedFromDb = useRef(false);
 
   useEffect(() => {
     if (!window.aneti) return;
+    if (!hydratedFromDb.current) {
+      window.aneti.listStoredDevices().then((stored) => {
+        if (hydratedFromDb.current) return;
+        if (Array.isArray(stored) && stored.length > 0) {
+          setDevices(stored as Device[]);
+          hydratedFromDb.current = true;
+        }
+      });
+    }
     window.aneti.startScan({ intervalMs: 8000 });
     setScanning(true);
     const unsubscribe = window.aneti.onDevices((next) => {
