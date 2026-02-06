@@ -18,6 +18,8 @@ type Subnet = {
   network: number;
   broadcast: number;
   prefix: number;
+  localIp: string;
+  localIpInt: number;
 };
 
 const execFileAsync = promisify(execFile);
@@ -59,6 +61,8 @@ const detectSubnets = (): Subnet[] => {
         network,
         broadcast,
         prefix,
+        localIp: addr.address,
+        localIpInt: ipInt,
       });
     }
   }
@@ -66,15 +70,25 @@ const detectSubnets = (): Subnet[] => {
   return subnets;
 };
 
+const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
+
 const expandSubnet = (subnet: Subnet, maxHosts: number) => {
   const hosts: string[] = [];
   const start = subnet.network + 1;
   const end = subnet.broadcast - 1;
-  const total = end - start + 1;
+  const total = Math.max(0, end - start + 1);
   const limit = Math.min(total, maxHosts);
 
+  if (limit <= 0) return hosts;
+
+  let rangeStart = start;
+  if (total > limit) {
+    const half = Math.floor(limit / 2);
+    rangeStart = clamp(subnet.localIpInt - half, start, end - limit + 1);
+  }
+
   for (let i = 0; i < limit; i += 1) {
-    hosts.push(intToIp(start + i));
+    hosts.push(intToIp(rangeStart + i));
   }
 
   return hosts;
@@ -217,6 +231,12 @@ export const createScanner = () => {
     for (const [ip, _mac] of arpMap.entries()) {
       if (!seen.has(ip)) {
         seen.set(ip, { latency: null });
+      }
+    }
+
+    for (const subnet of subnets) {
+      if (!seen.has(subnet.localIp)) {
+        seen.set(subnet.localIp, { latency: 0 });
       }
     }
 
