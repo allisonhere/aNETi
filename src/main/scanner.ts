@@ -70,6 +70,21 @@ const detectSubnets = (): Subnet[] => {
   return subnets;
 };
 
+const getLocalAddresses = () => {
+  const nets = os.networkInterfaces();
+  const results: Array<{ ip: string; netmask: string }> = [];
+
+  for (const iface of Object.values(nets)) {
+    if (!iface) continue;
+    for (const addr of iface) {
+      if (addr.family !== 'IPv4' || addr.internal) continue;
+      results.push({ ip: addr.address, netmask: addr.netmask });
+    }
+  }
+
+  return results;
+};
+
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
 
 const expandSubnet = (subnet: Subnet, maxHosts: number) => {
@@ -207,8 +222,18 @@ export const createScanner = () => {
 
   const scanOnce = async (options: ScannerOptions) => {
     const subnets = detectSubnets();
+    const localInterfaces = getLocalAddresses();
     if (subnets.length === 0) {
-      return devices;
+      const timestamp = now();
+      return localInterfaces.map((iface) => ({
+        id: deviceId(iface.ip),
+        ip: iface.ip,
+        hostname: os.hostname(),
+        firstSeen: timestamp,
+        lastSeen: timestamp,
+        status: 'online',
+        latencyMs: 0,
+      }));
     }
 
     const maxHosts = options.maxHosts ?? 256;
@@ -237,6 +262,12 @@ export const createScanner = () => {
     for (const subnet of subnets) {
       if (!seen.has(subnet.localIp)) {
         seen.set(subnet.localIp, { latency: 0 });
+      }
+    }
+
+    for (const iface of localInterfaces) {
+      if (!seen.has(iface.ip)) {
+        seen.set(iface.ip, { latency: 0 });
       }
     }
 

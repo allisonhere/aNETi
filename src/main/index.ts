@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createScanner } from './scanner';
 import { createDatabase } from './db';
@@ -9,6 +10,12 @@ const scanner = createScanner();
 let db: ReturnType<typeof createDatabase> | null = null;
 
 const createMainWindow = () => {
+  const preloadCandidates = [
+    join(__dirname, '../preload/index.mjs'),
+    join(__dirname, '../preload/index.js'),
+  ];
+  const preloadPath = preloadCandidates.find((candidate) => existsSync(candidate));
+
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 820,
@@ -19,7 +26,7 @@ const createMainWindow = () => {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
-      preload: join(__dirname, '../preload/index.js'),
+      preload: preloadPath,
     },
   });
 
