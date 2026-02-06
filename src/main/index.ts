@@ -61,6 +61,7 @@ app.whenReady().then(() => {
   ipcMain.handle('scanner:start', (_event, options) => scanner.start(options));
   ipcMain.handle('scanner:stop', () => scanner.stop());
   ipcMain.handle('scanner:list', () => scanner.list());
+  ipcMain.handle('scanner:diagnostics', (_event, options) => scanner.diagnostics(options));
   ipcMain.handle('db:devices', () => db?.listDevices() ?? []);
   ipcMain.handle('db:alerts', (_event, limit?: number) => db?.listAlerts(limit ?? 50) ?? []);
 

@@ -22,6 +22,14 @@ type Subnet = {
   localIpInt: number;
 };
 
+type InterfaceInfo = { ip: string; netmask: string };
+
+type ScannerDiagnostics = {
+  interfaces: InterfaceInfo[];
+  subnets: string[];
+  hostCount: number;
+};
+
 const execFileAsync = promisify(execFile);
 const now = () => Date.now();
 
@@ -42,6 +50,21 @@ const netmaskToPrefix = (mask: string) =>
     .map((octet) => Number(octet).toString(2).padStart(8, '0'))
     .join('')
     .split('1').length - 1;
+
+const getLocalAddresses = () => {
+  const nets = os.networkInterfaces();
+  const results: InterfaceInfo[] = [];
+
+  for (const iface of Object.values(nets)) {
+    if (!iface) continue;
+    for (const addr of iface) {
+      if (addr.family !== 'IPv4' || addr.internal) continue;
+      results.push({ ip: addr.address, netmask: addr.netmask });
+    }
+  }
+
+  return results;
+};
 
 const detectSubnets = (): Subnet[] => {
   const subnets: Subnet[] = [];
@@ -68,21 +91,6 @@ const detectSubnets = (): Subnet[] => {
   }
 
   return subnets;
-};
-
-const getLocalAddresses = () => {
-  const nets = os.networkInterfaces();
-  const results: Array<{ ip: string; netmask: string }> = [];
-
-  for (const iface of Object.values(nets)) {
-    if (!iface) continue;
-    for (const addr of iface) {
-      if (addr.family !== 'IPv4' || addr.internal) continue;
-      results.push({ ip: addr.address, netmask: addr.netmask });
-    }
-  }
-
-  return results;
 };
 
 const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
@@ -223,6 +231,7 @@ export const createScanner = () => {
   const scanOnce = async (options: ScannerOptions) => {
     const subnets = detectSubnets();
     const localInterfaces = getLocalAddresses();
+
     if (subnets.length === 0) {
       const timestamp = now();
       return localInterfaces.map((iface) => ({
@@ -326,6 +335,18 @@ export const createScanner = () => {
     return next.sort((a, b) => b.lastSeen - a.lastSeen);
   };
 
+  const diagnostics = (options: ScannerOptions = {}): ScannerDiagnostics => {
+    const subnets = detectSubnets();
+    const maxHosts = options.maxHosts ?? 256;
+    const hosts = subnets.flatMap((subnet) => expandSubnet(subnet, maxHosts));
+
+    return {
+      interfaces: getLocalAddresses(),
+      subnets: subnets.map((subnet) => subnet.cidr),
+      hostCount: hosts.length,
+    };
+  };
+
   const start = (options: ScannerOptions = {}) => {
     if (timer) return devices;
 
@@ -364,5 +385,6 @@ export const createScanner = () => {
     stop,
     list,
     onDevices,
+    diagnostics,
   };
 };

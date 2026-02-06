@@ -36,41 +36,63 @@ function StatCard({ label, value, tone }: { label: string; value: string; tone?:
 export default function App() {
   const [devices, setDevices] = useState<Device[]>([]);
   const [scanning, setScanning] = useState(false);
+  const [bridgeReady, setBridgeReady] = useState(false);
+  const [diagnostics, setDiagnostics] = useState<{ interfaces: Array<{ ip: string; netmask: string }>; subnets: string[]; hostCount: number } | null>(null);
   const { toasts, showToast, dismissToast } = useToast();
   const knownIds = useRef(new Set<string>());
   const hydratedFromDb = useRef(false);
 
   useEffect(() => {
-    if (!window.aneti) return;
-    if (!hydratedFromDb.current) {
-      window.aneti.listStoredDevices().then((stored) => {
-        if (hydratedFromDb.current) return;
+    let unsubscribe: (() => void) | undefined;
+    let pollTimer: number | undefined;
+
+    const boot = async () => {
+      if (!window.aneti) return;
+      setBridgeReady(true);
+
+      if (!hydratedFromDb.current) {
+        const stored = await window.aneti.listStoredDevices();
         if (Array.isArray(stored) && stored.length > 0) {
           setDevices(stored as Device[]);
           hydratedFromDb.current = true;
         }
-      });
-    }
-    window.aneti.startScan({ intervalMs: 8000 });
-    setScanning(true);
-    const unsubscribe = window.aneti.onDevices((next) => {
-      const list = next as Device[];
-      setDevices(list);
-
-      const known = knownIds.current;
-      for (const device of list) {
-        if (!known.has(device.id)) {
-          if (known.size > 0) {
-            showToast('info', `New device: ${device.hostname || device.ip}`);
-          }
-          known.add(device.id);
-        }
       }
-    });
+
+      const diag = await window.aneti.diagnostics({ maxHosts: 128 });
+      setDiagnostics(diag as { interfaces: Array<{ ip: string; netmask: string }>; subnets: string[]; hostCount: number });
+
+      await window.aneti.startScan({ intervalMs: 8000, maxHosts: 128 });
+      setScanning(true);
+
+      unsubscribe = window.aneti.onDevices((next) => {
+        const list = next as Device[];
+        setDevices(list);
+
+        const known = knownIds.current;
+        for (const device of list) {
+          if (!known.has(device.id)) {
+            if (known.size > 0) {
+              showToast('info', `New device: ${device.hostname || device.ip}`);
+            }
+            known.add(device.id);
+          }
+        }
+      });
+
+      pollTimer = window.setInterval(async () => {
+        const list = await window.aneti?.listDevices();
+        if (Array.isArray(list) && list.length > 0) {
+          setDevices(list as Device[]);
+        }
+      }, 12000);
+    };
+
+    void boot();
 
     return () => {
       unsubscribe?.();
-      window.aneti.stopScan();
+      if (pollTimer) window.clearInterval(pollTimer);
+      window.aneti?.stopScan();
     };
   }, [showToast]);
 
@@ -139,6 +161,24 @@ export default function App() {
             </button>
           </div>
         </header>
+
+        {!bridgeReady && (
+          <div className="mt-6 rounded-2xl border border-red-400/40 bg-red-500/10 p-4 text-sm text-red-100">
+            IPC bridge not ready. The renderer cannot reach the Electron preload layer yet.
+          </div>
+        )}
+
+        {bridgeReady && devices.length === 0 && diagnostics && (
+          <div className="mt-6 rounded-2xl border border-amber-300/30 bg-amber-500/10 p-4 text-sm text-amber-100">
+            <div className="text-xs uppercase tracking-[0.2em] text-amber-200/70">Discovery diagnostics</div>
+            <div className="mt-2">
+              Interfaces: {diagnostics.interfaces.length} · Subnets: {diagnostics.subnets.length} · Hosts scanned: {diagnostics.hostCount}
+            </div>
+            <div className="mt-2 text-xs text-amber-200/70">
+              If interfaces are zero, the app can’t see your network. Try restarting with permissions or share your OS so we can add a fallback.
+            </div>
+          </div>
+        )}
 
         <section className="mt-8 grid grid-cols-1 gap-4 md:grid-cols-3">
           <StatCard label="Devices" value={`${devices.length}`} tone="info" />
