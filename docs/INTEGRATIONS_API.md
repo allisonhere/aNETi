@@ -12,7 +12,7 @@ The server binds to localhost only.
 
 Headless web mode (`npm run start:web`) exposes browser/API endpoints on:
 
-- `http://<host>:<port>/dashboard`
+- `http://<host>:<port>/app`
 - `GET /api/health`
 - `GET /api/stats`
 - `GET /api/diagnostics`

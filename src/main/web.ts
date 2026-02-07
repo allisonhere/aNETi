@@ -1,6 +1,6 @@
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { join } from 'node:path';
+import { join, normalize, extname } from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
 import { createScanner } from './scanner.js';
 import { createDatabase } from './db.js';
@@ -11,18 +11,30 @@ const env = process.env;
 const host = env.ANETI_WEB_HOST ?? '0.0.0.0';
 const port = Number(env.ANETI_WEB_PORT ?? 8787);
 const scanIntervalMs = Number(env.ANETI_SCAN_INTERVAL_MS ?? 8000);
-const scanMaxHosts = Number(env.ANETI_SCAN_MAX_HOSTS ?? 256);
+const scanMaxHosts = Number(env.ANETI_SCAN_MAX_HOSTS ?? 1024);
 const scanBatchSize = Number(env.ANETI_SCAN_BATCH_SIZE ?? 64);
 const dataDir = env.ANETI_DATA_DIR ?? '/var/lib/aneti';
+const rendererDir = env.ANETI_RENDERER_DIR ?? join(process.cwd(), 'dist/renderer');
 
 mkdirSync(dataDir, { recursive: true });
 
 const db = createDatabase(join(dataDir, 'aneti.sqlite'));
 const settings = createSettingsStore(join(dataDir, 'settings.json'));
 const scanner = createScanner();
-const baselineDeviceIds = new Set<string>();
 const labelById = new Map<string, string>();
 let scannerRunning = false;
+
+const mimeByExt: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.ico': 'image/x-icon',
+};
 
 const secureEqual = (left: string, right: string) => {
   const a = Buffer.from(left, 'utf8');
@@ -37,12 +49,8 @@ const readTokenFromRequest = (request: IncomingMessage): string | null => {
     return bearer.slice(7).trim();
   }
   const headerToken = request.headers['x-api-token'];
-  if (typeof headerToken === 'string') {
-    return headerToken.trim();
-  }
-  const url = new URL(request.url ?? '/', `http://${host}:${port}`);
-  const token = url.searchParams.get('token');
-  return token?.trim() || null;
+  if (typeof headerToken === 'string') return headerToken.trim();
+  return null;
 };
 
 const writeJson = (response: ServerResponse, status: number, body: unknown) => {
@@ -53,12 +61,26 @@ const writeJson = (response: ServerResponse, status: number, body: unknown) => {
   response.end(JSON.stringify(body));
 };
 
-const writeHtml = (response: ServerResponse, status: number, body: string) => {
+const writeText = (response: ServerResponse, status: number, body: string, contentType: string) => {
   response.writeHead(status, {
-    'content-type': 'text/html; charset=utf-8',
+    'content-type': contentType,
     'cache-control': 'no-store',
   });
   response.end(body);
+};
+
+const parseJsonBody = async (request: IncomingMessage): Promise<any> => {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) {
+    chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+  }
+  const raw = Buffer.concat(chunks).toString('utf8').trim();
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
 };
 
 const requireAuth = (request: IncomingMessage, response: ServerResponse) => {
@@ -77,10 +99,8 @@ const buildStatsPayload = () => {
   const trustedIds = new Set(settings.getSecurity().trustedDeviceIds ?? []);
   const alerts = db.listAlerts(100) as Array<{ type: string; createdAt: number }>;
   const online = devices.filter((item) => item.status === 'online').length;
-  const anomalies = devices.filter(
-    (item) => item.status === 'online' && !trustedIds.has(item.id) && !baselineDeviceIds.has(item.id)
-  ).length;
   const trusted = devices.filter((item) => trustedIds.has(item.id)).length;
+  const anomalies = devices.filter((item) => item.status === 'online' && !trustedIds.has(item.id)).length;
   const alerts24h = alerts.filter((item) => now - item.createdAt <= 24 * 60 * 60_000);
 
   return {
@@ -98,142 +118,132 @@ const buildStatsPayload = () => {
       securityLast24h: alerts24h.filter((item) => item.type === 'security_anomaly').length,
       aiSummaryLast24h: alerts24h.filter((item) => item.type === 'ai_summary').length,
     },
-    devices: devices.map((device) => ({
-      id: device.id,
-      ip: device.ip,
-      hostname: device.hostname ?? null,
-      vendor: device.vendor ?? null,
-      label: device.label ?? null,
-      status: device.status,
-      firstSeen: device.firstSeen,
-      lastSeen: device.lastSeen,
-      trusted: trustedIds.has(device.id),
-    })),
+    devices,
   };
 };
 
-const dashboardHtml = () => `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>AnetI Web</title>
-  <style>
-    :root { color-scheme: light; --bg:#f4f7fb; --card:#fff; --text:#182033; --muted:#5f6d85; --ok:#0f8a5f; --warn:#b4481c; --line:#dbe3ef; }
-    body { margin:0; font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif; background:linear-gradient(160deg,#eef4ff 0%,#f8f9fc 100%); color:var(--text); }
-    .wrap { max-width: 1080px; margin: 24px auto; padding: 0 16px 40px; }
-    .card { background: var(--card); border:1px solid var(--line); border-radius: 14px; padding: 14px; box-shadow: 0 8px 24px rgba(20,32,56,.05); }
-    .row { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:12px; }
-    .metric { flex:1; min-width:140px; }
-    .metric h3 { margin:0; font-size:12px; color:var(--muted); font-weight:600; text-transform:uppercase; letter-spacing:.05em; }
-    .metric p { margin:4px 0 0; font-size:24px; font-weight:700; }
-    h1 { margin:0 0 12px; font-size:24px; }
-    table { width:100%; border-collapse: collapse; font-size: 14px; }
-    th,td { padding:8px; border-bottom:1px solid var(--line); text-align:left; }
-    th { color:var(--muted); font-size:12px; text-transform:uppercase; }
-    .online { color:var(--ok); font-weight:700; }
-    .offline { color:var(--warn); font-weight:700; }
-    .token { display:flex; gap:8px; margin-bottom:12px; }
-    input { flex:1; min-width:220px; padding:8px 10px; border:1px solid var(--line); border-radius:10px; }
-    button { border:0; background:#1d4ed8; color:white; border-radius:10px; padding:8px 12px; cursor:pointer; font-weight:600; }
-    .err { color:#b42318; margin:8px 0 0; font-size:13px; }
-    .meta { color:var(--muted); margin-bottom:8px; font-size:12px; }
-  </style>
-</head>
-<body>
-  <div class="wrap">
-    <h1>AnetI Browser Dashboard</h1>
-    <div class="card">
-      <div class="token">
-        <input id="token" placeholder="API token (from /var/lib/aneti/settings.json)" />
-        <button id="save">Connect</button>
-      </div>
-      <div id="err" class="err"></div>
-      <div id="meta" class="meta"></div>
-      <div class="row">
-        <div class="card metric"><h3>Total</h3><p id="m-total">-</p></div>
-        <div class="card metric"><h3>Online</h3><p id="m-online">-</p></div>
-        <div class="card metric"><h3>Trusted</h3><p id="m-trusted">-</p></div>
-        <div class="card metric"><h3>Anomalies</h3><p id="m-anomaly">-</p></div>
-      </div>
-      <table>
-        <thead><tr><th>Status</th><th>IP</th><th>Name</th><th>Vendor</th><th>Last Seen</th></tr></thead>
-        <tbody id="rows"></tbody>
-      </table>
-    </div>
-  </div>
-  <script>
-    const tokenInput = document.getElementById('token');
-    const saveBtn = document.getElementById('save');
-    const err = document.getElementById('err');
-    const rows = document.getElementById('rows');
-    const meta = document.getElementById('meta');
-    const mTotal = document.getElementById('m-total');
-    const mOnline = document.getElementById('m-online');
-    const mTrusted = document.getElementById('m-trusted');
-    const mAnomaly = document.getElementById('m-anomaly');
-    const key = 'aneti:web:token';
-    tokenInput.value = localStorage.getItem(key) || '';
+const bridgeScript = () => `(() => {
+  const key = 'aneti:web:token';
+  const meta = { preload: true, version: 'web-bridge-1' };
+  window.anetiMeta = meta;
 
-    const fmtTime = (t) => new Date(t).toLocaleString();
-    const setErr = (msg) => { err.textContent = msg || ''; };
+  const loadToken = () => localStorage.getItem(key) || '';
+  const saveToken = (v) => localStorage.setItem(key, v || '');
+  const ensureToken = () => {
+    let token = loadToken().trim();
+    if (!token) {
+      token = (prompt('Enter AnetI API token') || '').trim();
+      if (token) saveToken(token);
+    }
+    return token;
+  };
 
-    const render = (payload) => {
-      mTotal.textContent = String(payload.scanner.totalDevices);
-      mOnline.textContent = String(payload.scanner.onlineDevices);
-      mTrusted.textContent = String(payload.scanner.trustedDevices);
-      mAnomaly.textContent = String(payload.scanner.anomalyDevices);
-      meta.textContent = 'Updated: ' + fmtTime(payload.generatedAt);
-      rows.innerHTML = payload.devices.map((d) => {
-        const name = d.label || d.hostname || '-';
-        const vendor = d.vendor || '-';
-        const cls = d.status === 'online' ? 'online' : 'offline';
-        return '<tr><td class="' + cls + '">' + d.status.toUpperCase() + '</td><td>' + d.ip + '</td><td>' + name + '</td><td>' + vendor + '</td><td>' + fmtTime(d.lastSeen) + '</td></tr>';
-      }).join('');
-    };
-
-    const fetchStats = async () => {
-      const token = tokenInput.value.trim();
-      if (!token) {
-        setErr('Enter API token to load data.');
-        return;
-      }
-      try {
-        const res = await fetch('/api/stats', { headers: { 'Authorization': 'Bearer ' + token } });
-        if (!res.ok) {
-          setErr('Request failed: ' + res.status + ' (check token)');
-          return;
-        }
-        setErr('');
-        render(await res.json());
-      } catch (e) {
-        setErr(String(e));
-      }
-    };
-
-    saveBtn.addEventListener('click', () => {
-      localStorage.setItem(key, tokenInput.value.trim());
-      fetchStats();
+  const req = async (method, path, body) => {
+    let token = ensureToken();
+    const run = async () => fetch(path, {
+      method,
+      headers: {
+        'content-type': 'application/json',
+        ...(token ? { Authorization: 'Bearer ' + token } : {})
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
     });
-    setInterval(fetchStats, 7000);
-    fetchStats();
-  </script>
-</body>
-</html>`;
+    let res = await run();
+    if (res.status === 401) {
+      token = (prompt('API token invalid. Enter token again') || '').trim();
+      saveToken(token);
+      res = await run();
+    }
+    if (!res.ok) throw new Error(method + ' ' + path + ' failed: ' + res.status);
+    const ct = res.headers.get('content-type') || '';
+    if (ct.includes('application/json')) return res.json();
+    return null;
+  };
+
+  const onDevices = (callback) => {
+    let active = true;
+    const tick = async () => {
+      if (!active) return;
+      try {
+        const devices = await req('GET', '/api/scanner/list');
+        callback(devices);
+      } catch {}
+    };
+    tick();
+    const timer = setInterval(tick, 4000);
+    return () => { active = false; clearInterval(timer); };
+  };
+
+  window.aneti = {
+    startScan: (options) => req('POST', '/api/scanner/start', options || {}),
+    stopScan: () => req('POST', '/api/scanner/stop', {}),
+    listDevices: () => req('GET', '/api/scanner/list'),
+    listStoredDevices: () => req('GET', '/api/db/devices'),
+    listAlerts: (limit) => req('GET', '/api/db/alerts?limit=' + (limit || 50)),
+    listSightings: (deviceId, limit) => req('GET', '/api/db/sightings?deviceId=' + encodeURIComponent(deviceId) + '&limit=' + (limit || 30)),
+    updateDeviceLabel: (id, label) => req('POST', '/api/db/label', { id, label }),
+    diagnostics: (options) => req('GET', '/api/scanner/diagnostics?maxHosts=' + (options?.maxHosts || '')),
+    onDevices,
+    onSummary: () => () => {},
+    settingsGet: () => req('GET', '/api/settings'),
+    settingsUpdate: (provider, key) => req('POST', '/api/settings/provider', { provider, key }),
+    settingsUpdateAccent: (accentId) => req('POST', '/api/settings/accent', { accentId }),
+    settingsUpdateAlerts: (patch) => req('POST', '/api/settings/alerts', patch || {}),
+    settingsSetDeviceMuted: (deviceId, muted) => req('POST', '/api/settings/mute-device', { deviceId, muted }),
+    settingsSetDeviceTrusted: (deviceId, trusted) => req('POST', '/api/settings/trust-device', { deviceId, trusted }),
+    settingsUpdateIntegration: (patch) => req('POST', '/api/settings/integration', patch || {}),
+    settingsApiToken: () => req('GET', '/api/settings/api-token'),
+    settingsRotateApiToken: () => req('POST', '/api/settings/api-token/rotate', {}),
+    settingsTestNotification: async () => ({ ok: false, reason: 'unsupported_in_web_mode' }),
+    copyText: (value) => navigator.clipboard?.writeText(String(value || '')).catch(() => {}),
+  };
+})();`;
+
+const serveRendererIndex = (response: ServerResponse) => {
+  const indexPath = join(rendererDir, 'index.html');
+  if (!existsSync(indexPath)) {
+    writeText(
+      response,
+      503,
+      'Renderer build not found. Run: npm run build',
+      'text/plain; charset=utf-8'
+    );
+    return;
+  }
+
+  let html = readFileSync(indexPath, 'utf8');
+  if (!html.includes('/bridge.js')) {
+    html = html.replace('</head>', '  <script src="/bridge.js"></script>\n</head>');
+  }
+  writeText(response, 200, html, 'text/html; charset=utf-8');
+};
+
+const serveStatic = (urlPath: string, response: ServerResponse): boolean => {
+  const normalizedPath = normalize(urlPath).replace(/^(\.\.[/\\])+/, '');
+  const filePath = join(rendererDir, normalizedPath);
+  if (!filePath.startsWith(rendererDir) || !existsSync(filePath)) return false;
+  const stats = statSync(filePath);
+  if (!stats.isFile()) return false;
+  const ext = extname(filePath).toLowerCase();
+  const contentType = mimeByExt[ext] ?? 'application/octet-stream';
+  response.writeHead(200, {
+    'content-type': contentType,
+    'cache-control': ext === '.html' ? 'no-store' : 'public, max-age=300',
+  });
+  response.end(readFileSync(filePath));
+  return true;
+};
 
 const seedKnownDevices = () => {
   const existing = db.listDevices() as Device[];
   for (const device of existing) {
-    baselineDeviceIds.add(device.id);
-    if (device.label) {
-      labelById.set(device.id, device.label);
-    }
+    if (device.label) labelById.set(device.id, device.label);
   }
 };
 
 scanner.onDevices((devices: Device[]) => {
   const trustedIds = new Set(settings.getSecurity().trustedDeviceIds ?? []);
-  const labeled = (devices as Device[]).map((device) => ({
+  const labeled = devices.map((device) => ({
     ...device,
     label: labelById.get(device.id) ?? device.label,
     securityState: trustedIds.has(device.id) ? 'trusted' : null,
@@ -249,44 +259,159 @@ scanner.start({
 });
 scannerRunning = true;
 
-const server = createServer((request, response) => {
+const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? '/', `http://${host}:${port}`);
 
-  if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/dashboard')) {
-    writeHtml(response, 200, dashboardHtml());
+  if (request.method === 'GET' && url.pathname === '/bridge.js') {
+    writeText(response, 200, bridgeScript(), 'text/javascript; charset=utf-8');
     return;
   }
 
-  if (request.method === 'GET' && url.pathname === '/api/health') {
+  if (request.method === 'GET' && (url.pathname === '/' || url.pathname === '/app' || url.pathname === '/dashboard')) {
+    serveRendererIndex(response);
+    return;
+  }
+
+  if (request.method === 'GET' && url.pathname.startsWith('/assets/')) {
+    if (serveStatic(url.pathname, response)) return;
+  }
+
+  if (url.pathname.startsWith('/api/')) {
     if (!requireAuth(request, response)) return;
-    writeJson(response, 200, {
-      ok: true,
-      generatedAt: Date.now(),
-      scannerRunning,
-      deviceCount: scanner.list().length,
-    });
-    return;
+
+    if (request.method === 'GET' && url.pathname === '/api/health') {
+      writeJson(response, 200, {
+        ok: true,
+        generatedAt: Date.now(),
+        scannerRunning,
+        deviceCount: scanner.list().length,
+      });
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/stats') {
+      writeJson(response, 200, buildStatsPayload());
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/scanner/list') {
+      writeJson(response, 200, scanner.list());
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/scanner/start') {
+      const body = await parseJsonBody(request);
+      scanner.start(body ?? {});
+      scannerRunning = true;
+      writeJson(response, 200, { ok: true });
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/scanner/stop') {
+      scanner.stop();
+      scannerRunning = false;
+      writeJson(response, 200, { ok: true });
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/scanner/diagnostics') {
+      const maxHosts = Number(url.searchParams.get('maxHosts') ?? scanMaxHosts);
+      writeJson(response, 200, scanner.diagnostics({ maxHosts }));
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/db/devices') {
+      writeJson(response, 200, db.listDevices());
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/db/alerts') {
+      const limit = Number(url.searchParams.get('limit') ?? 50);
+      writeJson(response, 200, db.listAlerts(limit));
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/db/sightings') {
+      const deviceId = url.searchParams.get('deviceId') ?? '';
+      const limit = Number(url.searchParams.get('limit') ?? 30);
+      writeJson(response, 200, db.listSightingsByDevice(deviceId, limit));
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/db/label') {
+      const body = await parseJsonBody(request);
+      const id = String(body?.id ?? '');
+      const label = body?.label == null ? null : String(body.label);
+      const result = db.updateDeviceLabel(id, label);
+      if (label && label.trim().length > 0) {
+        labelById.set(id, label.trim());
+      } else {
+        labelById.delete(id);
+      }
+      writeJson(response, 200, result);
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/settings') {
+      writeJson(response, 200, settings.getPublic());
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/settings/provider') {
+      const body = await parseJsonBody(request);
+      writeJson(response, 200, settings.updateProvider(body.provider, body.key ?? null));
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/settings/accent') {
+      const body = await parseJsonBody(request);
+      writeJson(response, 200, settings.updateAccent(body.accentId ?? null));
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/settings/alerts') {
+      const body = await parseJsonBody(request);
+      writeJson(response, 200, settings.updateAlerts(body ?? {}));
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/settings/mute-device') {
+      const body = await parseJsonBody(request);
+      writeJson(response, 200, settings.setDeviceMuted(String(body.deviceId ?? ''), Boolean(body.muted)));
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/settings/trust-device') {
+      const body = await parseJsonBody(request);
+      writeJson(response, 200, settings.setDeviceTrusted(String(body.deviceId ?? ''), Boolean(body.trusted)));
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/settings/integration') {
+      const body = await parseJsonBody(request);
+      writeJson(response, 200, settings.updateIntegration(body ?? {}));
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/settings/api-token') {
+      writeJson(response, 200, { token: settings.ensureApiToken() });
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/settings/api-token/rotate') {
+      writeJson(response, 200, { token: settings.rotateApiToken() });
+      return;
+    }
   }
 
-  if (request.method === 'GET' && url.pathname === '/api/stats') {
-    if (!requireAuth(request, response)) return;
-    writeJson(response, 200, buildStatsPayload());
-    return;
-  }
-
-  if (request.method === 'GET' && url.pathname === '/api/diagnostics') {
-    if (!requireAuth(request, response)) return;
-    writeJson(response, 200, scanner.diagnostics({ maxHosts: scanMaxHosts }));
-    return;
-  }
-
+  if (serveStatic(url.pathname, response)) return;
   writeJson(response, 404, { ok: false, error: 'not_found' });
 });
 
 server.listen(port, host, () => {
   const token = settings.ensureApiToken();
   console.log(`[aneti-web] listening on http://${host}:${port}`);
-  console.log(`[aneti-web] dashboard: http://${host}:${port}/dashboard`);
+  console.log(`[aneti-web] app: http://${host}:${port}/app`);
   console.log(`[aneti-web] token: ${token}`);
 });
 

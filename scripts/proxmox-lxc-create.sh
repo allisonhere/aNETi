@@ -222,6 +222,6 @@ cat <<EOF
 EOF
 
 if [ "$WEB_SERVICE" -eq 1 ]; then
-  echo "- Browser dashboard: http://<ct-ip>:${WEB_PORT}/dashboard"
+  echo "- Browser app: http://<ct-ip>:${WEB_PORT}/app"
   echo "- Service logs: pct exec ${VMID} -- journalctl -u aneti-web -f"
 fi

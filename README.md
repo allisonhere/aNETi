@@ -71,7 +71,7 @@ npm run start:web
 
 Then open:
 
-- `http://<host>:8787/dashboard`
+- `http://<host>:8787/app`
 
 Environment overrides:
 

@@ -203,7 +203,7 @@ cat <<EOF
 EOF
 
 if [ "$WEB_SERVICE" -eq 1 ]; then
-  echo "- Web dashboard: http://<ct-ip>:${WEB_PORT}/dashboard"
+  echo "- Web app: http://<ct-ip>:${WEB_PORT}/app"
   if [ -n "$TOKEN" ]; then
     echo "- API token: ${TOKEN}"
   else
