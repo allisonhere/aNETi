@@ -60,6 +60,27 @@ npm run build
 npm run preview
 ```
 
+## Proxmox One-Line Install (Debian/Ubuntu VM/LXC)
+
+Run this inside your Proxmox guest:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/allisonhere/aNETi/main/scripts/proxmox-install.sh | sudo bash
+```
+
+What it does:
+
+- installs system dependencies needed by Electron and the scanner
+- installs Node.js 20 if missing
+- clones `allisonhere/aNETi` into `/opt/aneti`
+- runs `npm ci` and `npm run build`
+
+Custom install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/allisonhere/aNETi/main/scripts/proxmox-install.sh | sudo bash -s -- --repo allisonhere/aNETi --branch main --dir /opt/aneti
+```
+
 ## Settings Highlights
 
 - Alert toggles and cooldown controls
