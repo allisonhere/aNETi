@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { randomBytes } from 'node:crypto';
 
 export type ProviderId = 'openai' | 'gemini' | 'claude';
 
@@ -16,11 +17,18 @@ export type SecuritySettings = {
   trustedDeviceIds: string[];
 };
 
+export type IntegrationSettings = {
+  apiEnabled: boolean;
+  apiPort: number;
+  apiToken?: string;
+};
+
 type SettingsFile = {
   providers: Partial<Record<ProviderId, string>>;
   accentId?: string | null;
   alerts?: AlertSettings;
   security?: SecuritySettings;
+  integration?: IntegrationSettings;
   updatedAt: number;
 };
 
@@ -29,6 +37,12 @@ export type SettingsPublic = {
   accentId?: string | null;
   alerts: AlertSettings;
   security: SecuritySettings;
+  integration: {
+    apiEnabled: boolean;
+    apiPort: number;
+    hasApiToken: boolean;
+    tokenLast4: string | null;
+  };
   updatedAt: number;
 };
 
@@ -43,6 +57,12 @@ const defaultAlerts = (): AlertSettings => ({
 
 const defaultSecurity = (): SecuritySettings => ({
   trustedDeviceIds: [],
+});
+
+const defaultIntegration = (): IntegrationSettings => ({
+  apiEnabled: true,
+  apiPort: 8787,
+  apiToken: undefined,
 });
 
 const normalizeAlerts = (alerts?: Partial<AlertSettings> | null): AlertSettings => ({
@@ -75,11 +95,26 @@ const normalizeSecurity = (security?: Partial<SecuritySettings> | null): Securit
     : [],
 });
 
+const normalizeIntegration = (integration?: Partial<IntegrationSettings> | null): IntegrationSettings => ({
+  apiEnabled: integration?.apiEnabled ?? true,
+  apiPort:
+    typeof integration?.apiPort === 'number'
+      ? Math.min(Math.max(Math.round(integration.apiPort), 1024), 65535)
+      : 8787,
+  apiToken:
+    integration?.apiToken && String(integration.apiToken).trim().length > 0
+      ? String(integration.apiToken).trim()
+      : undefined,
+});
+
+const createApiToken = () => `aneti_${randomBytes(24).toString('hex')}`;
+
 const defaultSettings = (): SettingsFile => ({
   providers: {},
   accentId: null,
   alerts: defaultAlerts(),
   security: defaultSecurity(),
+  integration: defaultIntegration(),
   updatedAt: Date.now(),
 });
 
@@ -95,6 +130,8 @@ const scrubSettings = (settings: SettingsFile): SettingsPublic => {
     last4: value ? value.trim().slice(-4) : null,
   });
 
+  const integration = normalizeIntegration(settings.integration);
+
   return {
     providers: {
       openai: toMeta(providers.openai),
@@ -104,6 +141,12 @@ const scrubSettings = (settings: SettingsFile): SettingsPublic => {
     accentId: settings.accentId ?? null,
     alerts: normalizeAlerts(settings.alerts),
     security: normalizeSecurity(settings.security),
+    integration: {
+      apiEnabled: integration.apiEnabled,
+      apiPort: integration.apiPort,
+      hasApiToken: Boolean(integration.apiToken),
+      tokenLast4: integration.apiToken?.slice(-4) ?? null,
+    },
     updatedAt: settings.updatedAt,
   };
 };
@@ -125,6 +168,7 @@ export const createSettingsStore = (filePath: string) => {
         accentId: parsed.accentId ?? null,
         alerts: normalizeAlerts(parsed.alerts),
         security: normalizeSecurity(parsed.security),
+        integration: normalizeIntegration(parsed.integration),
         updatedAt: parsed.updatedAt ?? Date.now(),
       };
       return cache;
@@ -235,6 +279,45 @@ export const createSettingsStore = (filePath: string) => {
 
   const getSecurity = () => normalizeSecurity(load().security);
 
+  const updateIntegration = (patch: Partial<Pick<IntegrationSettings, 'apiEnabled' | 'apiPort'>>) => {
+    const settings = load();
+    const current = normalizeIntegration(settings.integration);
+    settings.integration = normalizeIntegration({
+      ...current,
+      ...patch,
+      apiToken: current.apiToken,
+    });
+    settings.updatedAt = Date.now();
+    cache = settings;
+    persist(settings);
+    return scrubSettings(settings);
+  };
+
+  const ensureApiToken = () => {
+    const settings = load();
+    const current = normalizeIntegration(settings.integration);
+    if (current.apiToken) return current.apiToken;
+    current.apiToken = createApiToken();
+    settings.integration = current;
+    settings.updatedAt = Date.now();
+    cache = settings;
+    persist(settings);
+    return current.apiToken;
+  };
+
+  const rotateApiToken = () => {
+    const settings = load();
+    const current = normalizeIntegration(settings.integration);
+    current.apiToken = createApiToken();
+    settings.integration = current;
+    settings.updatedAt = Date.now();
+    cache = settings;
+    persist(settings);
+    return current.apiToken;
+  };
+
+  const getIntegration = () => normalizeIntegration(load().integration);
+
   const getSecret = (provider: ProviderId) => load().providers[provider];
 
   return {
@@ -246,6 +329,10 @@ export const createSettingsStore = (filePath: string) => {
     getAlerts,
     setDeviceTrusted,
     getSecurity,
+    updateIntegration,
+    ensureApiToken,
+    rotateApiToken,
+    getIntegration,
     getSecret,
   };
 };

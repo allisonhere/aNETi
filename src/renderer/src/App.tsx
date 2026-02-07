@@ -58,6 +58,12 @@ type SettingsPublic = {
   security: {
     trustedDeviceIds: string[];
   };
+  integration: {
+    apiEnabled: boolean;
+    apiPort: number;
+    hasApiToken: boolean;
+    tokenLast4: string | null;
+  };
   updatedAt: number;
 };
 
@@ -90,8 +96,12 @@ type PulseSample = {
   at: number;
   online: number;
   anomalies: number;
+  newDevices1m: number;
   newDevices5m: number;
+  newDevices15m: number;
+  rejoins1m: number;
   rejoins5m: number;
+  rejoins15m: number;
   trusted: number;
 };
 
@@ -130,15 +140,27 @@ function NetworkPulseHero({
   onlineCount,
   trustedCount,
   anomalyCount,
-  newDevices5m,
-  rejoins5m,
+  newDevices,
+  rejoins,
+  windowLabel,
+  showNew,
+  showRejoins,
+  showAnomalies,
+  onWindowChange,
+  onToggleLine,
 }: {
   samples: PulseSample[];
   onlineCount: number;
   trustedCount: number;
   anomalyCount: number;
-  newDevices5m: number;
-  rejoins5m: number;
+  newDevices: number;
+  rejoins: number;
+  windowLabel: '1m' | '5m' | '15m';
+  showNew: boolean;
+  showRejoins: boolean;
+  showAnomalies: boolean;
+  onWindowChange: (window: '1m' | '5m' | '15m') => void;
+  onToggleLine: (line: 'new' | 'rejoins' | 'anomalies') => void;
 }) {
   const width = 760;
   const height = 170;
@@ -179,8 +201,16 @@ function NetworkPulseHero({
 
   const onlineSeries = samples.map((sample) => sample.online);
   const anomalySeries = samples.map((sample) => sample.anomalies);
-  const newSeries = samples.map((sample) => sample.newDevices5m);
-  const rejoinSeries = samples.map((sample) => sample.rejoins5m);
+  const newSeries = samples.map((sample) => {
+    if (windowLabel === '1m') return sample.newDevices1m;
+    if (windowLabel === '15m') return sample.newDevices15m;
+    return sample.newDevices5m;
+  });
+  const rejoinSeries = samples.map((sample) => {
+    if (windowLabel === '1m') return sample.rejoins1m;
+    if (windowLabel === '15m') return sample.rejoins15m;
+    return sample.rejoins5m;
+  });
   const maxOnline = Math.max(2, ...onlineSeries);
   const maxAnomaly = Math.max(1, ...anomalySeries);
   const maxNew = Math.max(1, ...newSeries);
@@ -231,12 +261,50 @@ function NetworkPulseHero({
           </span>
           <span className="pulse-chip pulse-chip--cyan">
             <Zap className="pulse-chip-icon" />
-            New / 5m {newDevices5m}
+            New / {windowLabel} {newDevices}
           </span>
           <span className="pulse-chip pulse-chip--amber">
             <Activity className="pulse-chip-icon" />
-            Rejoins / 5m {rejoins5m}
+            Rejoins / {windowLabel} {rejoins}
           </span>
+        </div>
+      </div>
+
+      <div className="pulse-controls">
+        <div className="pulse-control-group">
+          {(['1m', '5m', '15m'] as const).map((window) => (
+            <button
+              key={window}
+              type="button"
+              className={cn('pulse-control-button', windowLabel === window && 'pulse-control-button--active')}
+              onClick={() => onWindowChange(window)}
+            >
+              {window}
+            </button>
+          ))}
+        </div>
+        <div className="pulse-control-group">
+          <button
+            type="button"
+            className={cn('pulse-control-button pulse-control-button--cyan', showNew && 'pulse-control-button--active')}
+            onClick={() => onToggleLine('new')}
+          >
+            New
+          </button>
+          <button
+            type="button"
+            className={cn('pulse-control-button pulse-control-button--amber', showRejoins && 'pulse-control-button--active')}
+            onClick={() => onToggleLine('rejoins')}
+          >
+            Rejoins
+          </button>
+          <button
+            type="button"
+            className={cn('pulse-control-button pulse-control-button--red', showAnomalies && 'pulse-control-button--active')}
+            onClick={() => onToggleLine('anomalies')}
+          >
+            Anomalies
+          </button>
         </div>
       </div>
 
@@ -252,9 +320,9 @@ function NetworkPulseHero({
             </defs>
             <path d={onlineAreaPath} fill="url(#pulse-fill)" />
             <path d={onlinePath} className="pulse-line" />
-            <path d={newPath} className="pulse-line pulse-line--cyan" />
-            <path d={rejoinPath} className="pulse-line pulse-line--amber" />
-            <path d={anomalyPath} className="pulse-line pulse-line--anomaly" />
+            {showNew && <path d={newPath} className="pulse-line pulse-line--cyan" />}
+            {showRejoins && <path d={rejoinPath} className="pulse-line pulse-line--amber" />}
+            {showAnomalies && <path d={anomalyPath} className="pulse-line pulse-line--anomaly" />}
           </svg>
         </div>
 
@@ -362,6 +430,11 @@ export default function App() {
   const [savingMutedDeviceId, setSavingMutedDeviceId] = useState<string | null>(null);
   const [savingTrustedDeviceId, setSavingTrustedDeviceId] = useState<string | null>(null);
   const [sendingTestNotification, setSendingTestNotification] = useState(false);
+  const [savingIntegration, setSavingIntegration] = useState(false);
+  const [apiPortDraft, setApiPortDraft] = useState(8787);
+  const [apiToken, setApiToken] = useState<string>('');
+  const [loadingApiToken, setLoadingApiToken] = useState(false);
+  const [rotatingApiToken, setRotatingApiToken] = useState(false);
   const [alertTimingDraft, setAlertTimingDraft] = useState({
     startupWarmupSec: 45,
     globalCooldownSec: 20,
@@ -370,6 +443,12 @@ export default function App() {
   const [pulseSamples, setPulseSamples] = useState<PulseSample[]>([]);
   const [discoveryEvents, setDiscoveryEvents] = useState<number[]>([]);
   const [rejoinEvents, setRejoinEvents] = useState<number[]>([]);
+  const [pulseWindow, setPulseWindow] = useState<'1m' | '5m' | '15m'>('5m');
+  const [pulseLines, setPulseLines] = useState({
+    new: true,
+    rejoins: true,
+    anomalies: true,
+  });
   const { toasts, showToast, dismissToast } = useToast();
   const knownIds = useRef(new Set<string>());
   const hydratedFromDb = useRef(false);
@@ -410,6 +489,10 @@ export default function App() {
         if (data.accentId) {
           setAccentId(data.accentId);
         }
+        if (window.aneti.settingsApiToken) {
+          const tokenResult = (await window.aneti.settingsApiToken()) as { token?: string } | null;
+          setApiToken(tokenResult?.token ?? '');
+        }
       }
 
       const alerts = await window.aneti.listAlerts(20);
@@ -449,7 +532,7 @@ export default function App() {
         }
         if (rejoins > 0) {
           setRejoinEvents((prev) => [
-            ...prev.filter((item) => stamp - item <= 300_000),
+            ...prev.filter((item) => stamp - item <= 900_000),
             ...Array.from({ length: rejoins }, () => stamp),
           ]);
         }
@@ -467,7 +550,7 @@ export default function App() {
           }
           if (newCount > 0) {
             setDiscoveryEvents((prev) => [
-              ...prev.filter((item) => stamp - item <= 300_000),
+              ...prev.filter((item) => stamp - item <= 900_000),
               ...Array.from({ length: newCount }, () => stamp),
             ]);
           }
@@ -485,7 +568,7 @@ export default function App() {
         const newDevices = list.filter((device) => !known.has(device.id));
         if (newDevices.length === 0) return;
         setDiscoveryEvents((prev) => [
-          ...prev.filter((item) => stamp - item <= 300_000),
+          ...prev.filter((item) => stamp - item <= 900_000),
           ...Array.from({ length: newDevices.length }, () => stamp),
         ]);
 
@@ -618,13 +701,29 @@ export default function App() {
     () => devices.filter((device) => device.securityState === 'anomaly').length,
     [devices]
   );
+  const newDevices1m = useMemo(() => {
+    const now = Date.now();
+    return discoveryEvents.filter((item) => now - item <= 60_000).length;
+  }, [discoveryEvents]);
   const newDevices5m = useMemo(() => {
     const now = Date.now();
     return discoveryEvents.filter((item) => now - item <= 300_000).length;
   }, [discoveryEvents]);
+  const newDevices15m = useMemo(() => {
+    const now = Date.now();
+    return discoveryEvents.filter((item) => now - item <= 900_000).length;
+  }, [discoveryEvents]);
+  const rejoins1m = useMemo(() => {
+    const now = Date.now();
+    return rejoinEvents.filter((item) => now - item <= 60_000).length;
+  }, [rejoinEvents]);
   const rejoins5m = useMemo(() => {
     const now = Date.now();
     return rejoinEvents.filter((item) => now - item <= 300_000).length;
+  }, [rejoinEvents]);
+  const rejoins15m = useMemo(() => {
+    const now = Date.now();
+    return rejoinEvents.filter((item) => now - item <= 900_000).length;
   }, [rejoinEvents]);
   const lastSeen = devices[0]?.lastSeen;
   const hasAiKey = settings
@@ -878,6 +977,47 @@ export default function App() {
     setSendingTestNotification(false);
   };
 
+  const loadApiToken = async () => {
+    if (!window.aneti?.settingsApiToken) {
+      showToast('error', 'API token controls unavailable.');
+      return;
+    }
+    setLoadingApiToken(true);
+    const result = (await window.aneti.settingsApiToken()) as { token?: string } | null;
+    setApiToken(result?.token ?? '');
+    setLoadingApiToken(false);
+  };
+
+  const handleUpdateIntegration = async (patch: { apiEnabled?: boolean; apiPort?: number }) => {
+    if (!window.aneti?.settingsUpdateIntegration) {
+      showToast('error', 'Integration settings unavailable.');
+      return;
+    }
+    setSavingIntegration(true);
+    const updated = await window.aneti.settingsUpdateIntegration(patch);
+    if (updated) {
+      setSettings(updated as SettingsPublic);
+      showToast('success', 'Integration settings updated.');
+    }
+    setSavingIntegration(false);
+  };
+
+  const handleRotateApiToken = async () => {
+    if (!window.aneti?.settingsRotateApiToken) {
+      showToast('error', 'API token controls unavailable.');
+      return;
+    }
+    setRotatingApiToken(true);
+    const result = (await window.aneti.settingsRotateApiToken()) as { token?: string } | null;
+    if (result?.token) {
+      setApiToken(result.token);
+      showToast('success', 'API token rotated.');
+    } else {
+      showToast('error', 'Failed to rotate API token.');
+    }
+    setRotatingApiToken(false);
+  };
+
   const handleSaveAlertTiming = async () => {
     const startupWarmupMs = Math.max(0, Math.min(300, Math.round(alertTimingDraft.startupWarmupSec))) * 1000;
     const globalCooldownMs = Math.max(5, Math.min(300, Math.round(alertTimingDraft.globalCooldownSec))) * 1000;
@@ -895,6 +1035,11 @@ export default function App() {
   }, [settings?.alerts]);
 
   useEffect(() => {
+    if (!settings?.integration) return;
+    setApiPortDraft(settings.integration.apiPort ?? 8787);
+  }, [settings?.integration?.apiPort]);
+
+  useEffect(() => {
     const now = Date.now();
     if (now - lastPulseSampleAt.current < 1200 && pulseSamples.length > 0) return;
     lastPulseSampleAt.current = now;
@@ -905,14 +1050,32 @@ export default function App() {
           at: now,
           online: onlineCount,
           anomalies: anomalyCount,
+          newDevices1m,
           newDevices5m,
+          newDevices15m,
+          rejoins1m,
           rejoins5m,
+          rejoins15m,
           trusted: trustedCount,
         },
       ];
       return next.slice(-72);
     });
-  }, [onlineCount, anomalyCount, newDevices5m, rejoins5m, trustedCount, pulseSamples.length]);
+  }, [
+    onlineCount,
+    anomalyCount,
+    newDevices1m,
+    newDevices5m,
+    newDevices15m,
+    rejoins1m,
+    rejoins5m,
+    rejoins15m,
+    trustedCount,
+    pulseSamples.length,
+  ]);
+
+  const pulseNewValue = pulseWindow === '1m' ? newDevices1m : pulseWindow === '15m' ? newDevices15m : newDevices5m;
+  const pulseRejoinValue = pulseWindow === '1m' ? rejoins1m : pulseWindow === '15m' ? rejoins15m : rejoins5m;
 
   return (
     <div className="min-h-screen bg-[#070b1a] text-white">
@@ -1014,8 +1177,19 @@ export default function App() {
               onlineCount={onlineCount}
               trustedCount={trustedCount}
               anomalyCount={anomalyCount}
-              newDevices5m={newDevices5m}
-              rejoins5m={rejoins5m}
+              newDevices={pulseNewValue}
+              rejoins={pulseRejoinValue}
+              windowLabel={pulseWindow}
+              showNew={pulseLines.new}
+              showRejoins={pulseLines.rejoins}
+              showAnomalies={pulseLines.anomalies}
+              onWindowChange={setPulseWindow}
+              onToggleLine={(line) =>
+                setPulseLines((prev) => ({
+                  ...prev,
+                  [line]: !prev[line],
+                }))
+              }
             />
             <section className="mt-8 grid grid-cols-1 gap-4 md:grid-cols-3">
               <StatCard label="Devices" value={`${devices.length}`} tone="info" />
@@ -1773,6 +1947,137 @@ export default function App() {
                   >
                     Save timing
                   </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur">
+              <div className="flex items-center gap-3">
+                <div className="rounded-2xl bg-white/10 p-3">
+                  <Router className="h-5 w-5 text-sky-300" />
+                </div>
+                <div>
+                  <div className="text-xs uppercase tracking-[0.3em] text-white/50">Integrations API</div>
+                  <h2 className="mt-2 text-lg font-semibold">External app access</h2>
+                </div>
+              </div>
+              <p className="mt-3 text-sm text-white/60 max-w-xl">
+                Expose local network stats for other apps. Requests must include your API token.
+              </p>
+
+              <div className="scan-settings">
+                <div className="scan-setting-row">
+                  <div>
+                    <div className="scan-setting-label">Enable local API</div>
+                    <div className="scan-setting-help">Serve `/health` and `/stats` on localhost.</div>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={savingIntegration}
+                    aria-pressed={settings?.integration?.apiEnabled ?? true}
+                    onClick={() =>
+                      handleUpdateIntegration({
+                        apiEnabled: !(settings?.integration?.apiEnabled ?? true),
+                      })
+                    }
+                    className={cn(
+                      'toggle-button',
+                      (settings?.integration?.apiEnabled ?? true) && 'toggle-button--on'
+                    )}
+                  >
+                    <span className="toggle-knob" aria-hidden="true" />
+                    <span className="toggle-label">
+                      {(settings?.integration?.apiEnabled ?? true) ? 'Enabled' : 'Disabled'}
+                    </span>
+                  </button>
+                </div>
+
+                <div className="scan-setting-row">
+                  <div>
+                    <div className="scan-setting-label">API port</div>
+                    <div className="scan-setting-help">Use a local port from 1024 to 65535.</div>
+                  </div>
+                  <div className="detail-inline-actions">
+                    <input
+                      type="number"
+                      min={1024}
+                      max={65535}
+                      step={1}
+                      className="detail-input scan-batch-input"
+                      value={apiPortDraft}
+                      onChange={(event) => {
+                        const parsed = Number(event.target.value);
+                        if (!Number.isFinite(parsed)) return;
+                        setApiPortDraft(Math.max(1024, Math.min(65535, Math.round(parsed))));
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="detail-action detail-action--ghost"
+                      disabled={savingIntegration || apiPortDraft === (settings?.integration?.apiPort ?? 8787)}
+                      onClick={() => handleUpdateIntegration({ apiPort: apiPortDraft })}
+                    >
+                      Save port
+                    </button>
+                  </div>
+                </div>
+
+                <div className="scan-setting-row">
+                  <div>
+                    <div className="scan-setting-label">Endpoint</div>
+                    <div className="scan-setting-help">
+                      {`http://127.0.0.1:${settings?.integration?.apiPort ?? 8787} (GET /health, GET /stats)`}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="detail-action detail-action--ghost"
+                    onClick={() => copyText(`http://127.0.0.1:${settings?.integration?.apiPort ?? 8787}`, 'API endpoint')}
+                  >
+                    Copy endpoint
+                  </button>
+                </div>
+
+                <div>
+                  <div className="scan-setting-label">API token</div>
+                  <div className="scan-setting-help">Send as `Authorization: Bearer &lt;token&gt;` or `X-API-Token`.</div>
+                  <div className="mt-2 detail-inline-actions">
+                    <input
+                      type="text"
+                      className="input-field integration-token-field"
+                      value={apiToken || 'Token unavailable'}
+                      readOnly
+                    />
+                    <button
+                      type="button"
+                      className="detail-action"
+                      onClick={() => copyText(apiToken, 'API token')}
+                      disabled={!apiToken}
+                    >
+                      Copy token
+                    </button>
+                    <button
+                      type="button"
+                      className="detail-action detail-action--ghost"
+                      onClick={() => void loadApiToken()}
+                      disabled={loadingApiToken}
+                    >
+                      {loadingApiToken ? 'Loading…' : 'Refresh token'}
+                    </button>
+                    <button
+                      type="button"
+                      className="detail-action detail-action--ghost"
+                      onClick={handleRotateApiToken}
+                      disabled={rotatingApiToken}
+                    >
+                      {rotatingApiToken ? 'Rotating…' : 'Rotate token'}
+                    </button>
+                  </div>
+                  <div className="scan-setting-note mt-2">
+                    {settings?.integration?.hasApiToken
+                      ? `Stored token ending in ${settings?.integration?.tokenLast4 ?? '----'}.`
+                      : 'No token generated yet.'}
+                  </div>
                 </div>
               </div>
             </div>

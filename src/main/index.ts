@@ -1,5 +1,7 @@
 import { Notification, app, BrowserWindow, ipcMain, shell } from 'electron';
+import { timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { join } from 'node:path';
 import { createScanner } from './scanner';
 import { createDatabase } from './db';
@@ -26,6 +28,170 @@ const lastSecurityAlertAtById = new Map<string, number>();
 let lastGlobalAlertAt = 0;
 let alertWarmupUntil = 0;
 const securityAlertCooldownMs = 5 * 60_000;
+let integrationServer: ReturnType<typeof createServer> | null = null;
+let integrationPort: number | null = null;
+let scannerRunning = false;
+
+const secureEqual = (left: string, right: string) => {
+  const a = Buffer.from(left, 'utf8');
+  const b = Buffer.from(right, 'utf8');
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+};
+
+const readTokenFromRequest = (request: IncomingMessage): string | null => {
+  const bearer = request.headers.authorization;
+  if (typeof bearer === 'string' && bearer.toLowerCase().startsWith('bearer ')) {
+    return bearer.slice(7).trim();
+  }
+  const headerToken = request.headers['x-api-token'];
+  if (typeof headerToken === 'string') {
+    return headerToken.trim();
+  }
+  return null;
+};
+
+const writeJson = (response: ServerResponse, status: number, body: unknown) => {
+  response.writeHead(status, {
+    'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store',
+    'access-control-allow-origin': '*',
+    'access-control-allow-methods': 'GET, OPTIONS',
+    'access-control-allow-headers': 'Authorization, X-API-Token, Content-Type',
+  });
+  response.end(JSON.stringify(body));
+};
+
+const buildStatsPayload = () => {
+  const now = Date.now();
+  const devices = scanner.list() as Device[];
+  const trustedIds = new Set(settings?.getSecurity().trustedDeviceIds ?? []);
+  const alerts = db?.listAlerts(100) ?? [];
+  const online = devices.filter((item) => item.status === 'online').length;
+  const anomalies = devices.filter(
+    (item) => item.status === 'online' && !trustedIds.has(item.id) && !baselineDeviceIds.has(item.id)
+  ).length;
+  const trusted = devices.filter((item) => trustedIds.has(item.id)).length;
+  const alerts24h = (alerts as Array<{ type: string; createdAt: number }>).filter(
+    (item) => now - item.createdAt <= 24 * 60 * 60_000
+  );
+
+  return {
+    generatedAt: now,
+    scanner: {
+      scanning: scannerRunning,
+      totalDevices: devices.length,
+      onlineDevices: online,
+      offlineDevices: Math.max(0, devices.length - online),
+      trustedDevices: trusted,
+      anomalyDevices: anomalies,
+    },
+    alerts: {
+      last24h: alerts24h.length,
+      securityLast24h: alerts24h.filter((item) => item.type === 'security_anomaly').length,
+      aiSummaryLast24h: alerts24h.filter((item) => item.type === 'ai_summary').length,
+    },
+    devices: devices.map((device) => ({
+      id: device.id,
+      ip: device.ip,
+      hostname: device.hostname ?? null,
+      vendor: device.vendor ?? null,
+      label: device.label ?? null,
+      status: device.status,
+      firstSeen: device.firstSeen,
+      lastSeen: device.lastSeen,
+      trusted: trustedIds.has(device.id),
+    })),
+  };
+};
+
+const handleIntegrationRequest = (request: IncomingMessage, response: ServerResponse) => {
+  if (!settings) {
+    writeJson(response, 503, { ok: false, error: 'settings_unavailable' });
+    return;
+  }
+
+  if (request.method === 'OPTIONS') {
+    writeJson(response, 204, {});
+    return;
+  }
+
+  if (request.method !== 'GET') {
+    writeJson(response, 405, { ok: false, error: 'method_not_allowed' });
+    return;
+  }
+
+  const config = settings.getIntegration();
+  const token = config.apiToken ?? settings.ensureApiToken();
+  const suppliedToken = readTokenFromRequest(request);
+  if (!suppliedToken || !secureEqual(suppliedToken, token)) {
+    writeJson(response, 401, { ok: false, error: 'unauthorized' });
+    return;
+  }
+
+  const url = new URL(request.url ?? '/', 'http://127.0.0.1');
+  if (url.pathname === '/health') {
+    writeJson(response, 200, {
+      ok: true,
+      generatedAt: Date.now(),
+      scannerRunning,
+      deviceCount: scanner.list().length,
+    });
+    return;
+  }
+
+  if (url.pathname === '/stats') {
+    writeJson(response, 200, buildStatsPayload());
+    return;
+  }
+
+  writeJson(response, 404, { ok: false, error: 'not_found' });
+};
+
+const stopIntegrationServer = async () => {
+  if (!integrationServer) return;
+  const server = integrationServer;
+  integrationServer = null;
+  integrationPort = null;
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
+};
+
+const startIntegrationServer = async () => {
+  if (!settings) return;
+  const config = settings.getIntegration();
+  if (!config.apiEnabled) {
+    await stopIntegrationServer();
+    return;
+  }
+
+  if (integrationServer && integrationPort === config.apiPort) return;
+  await stopIntegrationServer();
+
+  const server = createServer((request, response) => handleIntegrationRequest(request, response));
+  server.on('error', (error) => {
+    console.error('Integration API server error:', error);
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    const onError = (error: unknown) => {
+      server.off('listening', onListening);
+      reject(error);
+    };
+    const onListening = () => {
+      server.off('error', onError);
+      resolve();
+    };
+    server.once('error', onError);
+    server.once('listening', onListening);
+    server.listen(config.apiPort, '127.0.0.1');
+  });
+
+  integrationServer = server;
+  integrationPort = config.apiPort;
+  console.log(`Integration API listening at http://127.0.0.1:${config.apiPort}`);
+};
 
 const processAiQueue = async () => {
   if (aiWorking || !ai) return;
@@ -257,7 +423,11 @@ app.whenReady().then(() => {
   db = createDatabase(dbPath);
   settings = createSettingsStore(join(app.getPath('userData'), 'settings.json'));
   ai = createAiClient((provider) => settings?.getSecret(provider));
+  settings.ensureApiToken();
   alertWarmupUntil = Date.now() + (settings?.getAlerts().startupWarmupMs ?? 45_000);
+  void startIntegrationServer().catch((error) => {
+    console.error('Failed to start integration API server:', error);
+  });
 
   ipcMain.on('preload:ready', (_event, payload) => {
     console.log('Preload ready:', payload);
@@ -265,8 +435,14 @@ app.whenReady().then(() => {
 
   createMainWindow();
 
-  ipcMain.handle('scanner:start', (_event, options) => scanner.start(options));
-  ipcMain.handle('scanner:stop', () => scanner.stop());
+  ipcMain.handle('scanner:start', (_event, options) => {
+    scannerRunning = true;
+    return scanner.start(options);
+  });
+  ipcMain.handle('scanner:stop', () => {
+    scannerRunning = false;
+    return scanner.stop();
+  });
   ipcMain.handle('scanner:list', () => scanner.list());
   ipcMain.handle('scanner:diagnostics', (_event, options) => scanner.diagnostics(options));
   ipcMain.handle('db:devices', () => db?.listDevices() ?? []);
@@ -318,6 +494,28 @@ app.whenReady().then(() => {
   ipcMain.handle('settings:trust-device', (_event, deviceId: string, trusted: boolean) =>
     settings?.setDeviceTrusted(deviceId, trusted) ?? null
   );
+  ipcMain.handle(
+    'settings:integration',
+    (_event, patch: { apiEnabled?: boolean; apiPort?: number }) => {
+      const updated = settings?.updateIntegration(patch) ?? null;
+      if (updated) {
+        void startIntegrationServer().catch((error) => {
+          console.error('Failed to apply integration API settings:', error);
+        });
+      }
+      return updated;
+    }
+  );
+  ipcMain.handle('settings:api-token', () => {
+    if (!settings) return null;
+    const token = settings.ensureApiToken();
+    return { token };
+  });
+  ipcMain.handle('settings:api-token:rotate', () => {
+    if (!settings) return null;
+    const token = settings.rotateApiToken();
+    return { token };
+  });
   ipcMain.handle('settings:test-notification', () => {
     if (!Notification.isSupported()) {
       return { ok: false, reason: 'unsupported' };
@@ -360,5 +558,13 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
+  }
+});
+
+app.on('before-quit', () => {
+  if (integrationServer) {
+    integrationServer.close();
+    integrationServer = null;
+    integrationPort = null;
   }
 });

@@ -34,6 +34,9 @@ contextBridge.exposeInMainWorld('aneti', {
   settingsUpdateAlerts: (patch) => ipcRenderer.invoke('settings:alerts', patch),
   settingsSetDeviceMuted: (deviceId, muted) => ipcRenderer.invoke('settings:mute-device', deviceId, muted),
   settingsSetDeviceTrusted: (deviceId, trusted) => ipcRenderer.invoke('settings:trust-device', deviceId, trusted),
+  settingsUpdateIntegration: (patch) => ipcRenderer.invoke('settings:integration', patch),
+  settingsApiToken: () => ipcRenderer.invoke('settings:api-token'),
+  settingsRotateApiToken: () => ipcRenderer.invoke('settings:api-token:rotate'),
   settingsTestNotification: () => ipcRenderer.invoke('settings:test-notification'),
   copyText: (value) => clipboard.writeText(String(value || '')),
 });

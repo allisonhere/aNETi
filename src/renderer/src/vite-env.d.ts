@@ -34,6 +34,9 @@ declare global {
       }) => Promise<unknown>;
       settingsSetDeviceMuted: (deviceId: string, muted: boolean) => Promise<unknown>;
       settingsSetDeviceTrusted: (deviceId: string, trusted: boolean) => Promise<unknown>;
+      settingsUpdateIntegration: (patch: { apiEnabled?: boolean; apiPort?: number }) => Promise<unknown>;
+      settingsApiToken: () => Promise<unknown>;
+      settingsRotateApiToken: () => Promise<unknown>;
       settingsTestNotification: () => Promise<unknown>;
       copyText: (value: string) => void;
     };
