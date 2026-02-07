@@ -51,7 +51,8 @@ pick_debian12_template() {
 }
 
 random_password() {
-  tr -dc 'A-Za-z0-9_@%+=' </dev/urandom | head -c 24
+  # head closes the pipe early, which can trip pipefail; tolerate that here.
+  tr -dc 'A-Za-z0-9_@%+=' </dev/urandom | head -c 24 || true
 }
 
 if [ "$(id -u)" -ne 0 ]; then
