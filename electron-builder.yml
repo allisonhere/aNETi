@@ -9,6 +9,8 @@ files:
   - LICENSE
 linux:
   category: Network
+  maintainer: "AnetI Maintainers <maintainers@aneti.local>"
+  synopsis: "Realtime LAN discovery and device intelligence console"
   target:
     - target: deb
       arch:
