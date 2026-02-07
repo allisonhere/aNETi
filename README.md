@@ -81,6 +81,27 @@ Custom install:
 curl -fsSL https://raw.githubusercontent.com/allisonhere/aNETi/main/scripts/proxmox-install.sh | sudo bash -s -- --repo allisonhere/aNETi --branch main --dir /opt/aneti
 ```
 
+## Proxmox LXC One-Line Create + Install (Run On Proxmox Host)
+
+This creates a new LXC and installs AnetI inside the container (not on host):
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/allisonhere/aNETi/main/scripts/proxmox-lxc-create.sh)"
+```
+
+Common custom example:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/allisonhere/aNETi/main/scripts/proxmox-lxc-create.sh)" -- --vmid 120 --hostname aneti --storage local-lvm --bridge vmbr0
+```
+
+Notes:
+
+- run as `root` on Proxmox host
+- defaults to latest `debian-12-standard` template via `pveam`
+- creates a privileged CT (`--unprivileged 0`) for simpler network-scanner behavior
+- after creation, runs `scripts/proxmox-install.sh` inside the CT
+
 ## Settings Highlights
 
 - Alert toggles and cooldown controls
