@@ -15,6 +15,7 @@ const scanMaxHosts = Number(env.ANETI_SCAN_MAX_HOSTS ?? 1024);
 const scanBatchSize = Number(env.ANETI_SCAN_BATCH_SIZE ?? 64);
 const dataDir = env.ANETI_DATA_DIR ?? '/var/lib/aneti';
 const rendererDir = env.ANETI_RENDERER_DIR ?? join(process.cwd(), 'dist/renderer');
+const disableAuth = env.ANETI_WEB_DISABLE_AUTH === '1';
 
 mkdirSync(dataDir, { recursive: true });
 
@@ -84,6 +85,7 @@ const parseJsonBody = async (request: IncomingMessage): Promise<any> => {
 };
 
 const requireAuth = (request: IncomingMessage, response: ServerResponse) => {
+  if (disableAuth) return true;
   const expected = settings.ensureApiToken();
   const supplied = readTokenFromRequest(request);
   if (!supplied || !secureEqual(supplied, expected)) {
@@ -123,6 +125,7 @@ const buildStatsPayload = () => {
 };
 
 const bridgeScript = () => `(() => {
+  const authDisabled = ${disableAuth ? 'true' : 'false'};
   const key = 'aneti:web:token';
   const meta = { preload: true, version: 'web-bridge-1' };
   window.anetiMeta = meta;
@@ -130,6 +133,12 @@ const bridgeScript = () => `(() => {
   const loadToken = () => localStorage.getItem(key) || '';
   const saveToken = (v) => localStorage.setItem(key, v || '');
   const ensureToken = () => {
+    if (authDisabled) return '';
+    const fromUrl = new URLSearchParams(location.search).get('token');
+    if (fromUrl && fromUrl.trim()) {
+      saveToken(fromUrl.trim());
+      return fromUrl.trim();
+    }
     let token = loadToken().trim();
     if (!token) {
       token = (prompt('Enter AnetI API token') || '').trim();
@@ -144,7 +153,7 @@ const bridgeScript = () => `(() => {
       method,
       headers: {
         'content-type': 'application/json',
-        ...(token ? { Authorization: 'Bearer ' + token } : {})
+        ...(!authDisabled && token ? { Authorization: 'Bearer ' + token } : {})
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
@@ -412,7 +421,11 @@ server.listen(port, host, () => {
   const token = settings.ensureApiToken();
   console.log(`[aneti-web] listening on http://${host}:${port}`);
   console.log(`[aneti-web] app: http://${host}:${port}/app`);
-  console.log(`[aneti-web] token: ${token}`);
+  if (disableAuth) {
+    console.log('[aneti-web] auth: disabled (ANETI_WEB_DISABLE_AUTH=1)');
+  } else {
+    console.log(`[aneti-web] token: ${token}`);
+  }
 });
 
 const shutdown = () => {

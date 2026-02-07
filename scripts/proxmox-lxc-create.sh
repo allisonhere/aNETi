@@ -26,6 +26,7 @@ Options:
   --branch NAME             Git branch (default: main)
   --dir PATH                Install dir in CT (default: /opt/aneti)
   --web-port N              Browser/API service port inside CT (default: 8787)
+  --web-disable-auth        Disable API token auth in web mode
   --no-web-service          Skip headless web service install
   --start                   Start CT after create (default: true)
   --no-start                Do not start CT or install AnetI
@@ -99,6 +100,7 @@ BRANCH="main"
 INSTALL_DIR="/opt/aneti"
 WEB_SERVICE=1
 WEB_PORT="8787"
+WEB_DISABLE_AUTH=0
 DO_START=1
 
 while [ $# -gt 0 ]; do
@@ -118,6 +120,7 @@ while [ $# -gt 0 ]; do
     --branch) BRANCH="${2:-}"; shift 2 ;;
     --dir) INSTALL_DIR="${2:-}"; shift 2 ;;
     --web-port) WEB_PORT="${2:-}"; shift 2 ;;
+    --web-disable-auth) WEB_DISABLE_AUTH=1; shift ;;
     --no-web-service) WEB_SERVICE=0; shift ;;
     --start) DO_START=1; shift ;;
     --no-start) DO_START=0; shift ;;
@@ -206,6 +209,9 @@ echo "[aneti] Installing AnetI inside CT ${VMID}..."
 INSTALL_ARGS="--repo ${REPO} --branch ${BRANCH} --dir ${INSTALL_DIR}"
 if [ "$WEB_SERVICE" -eq 1 ]; then
   INSTALL_ARGS="${INSTALL_ARGS} --web-service --web-port ${WEB_PORT} --web-host 0.0.0.0"
+  if [ "$WEB_DISABLE_AUTH" -eq 1 ]; then
+    INSTALL_ARGS="${INSTALL_ARGS} --web-disable-auth"
+  fi
 fi
 pct exec "$VMID" -- bash -lc "apt-get update -y && apt-get install -y curl ca-certificates && curl -fsSL https://raw.githubusercontent.com/${REPO}/${BRANCH}/scripts/proxmox-install.sh | bash -s -- ${INSTALL_ARGS}"
 
@@ -223,5 +229,8 @@ EOF
 
 if [ "$WEB_SERVICE" -eq 1 ]; then
   echo "- Browser app: http://<ct-ip>:${WEB_PORT}/app"
+  if [ "$WEB_DISABLE_AUTH" -eq 1 ]; then
+    echo "- Auth: disabled"
+  fi
   echo "- Service logs: pct exec ${VMID} -- journalctl -u aneti-web -f"
 fi

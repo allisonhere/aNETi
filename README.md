@@ -78,6 +78,7 @@ Environment overrides:
 - `ANETI_WEB_HOST` (default `0.0.0.0`)
 - `ANETI_WEB_PORT` (default `8787`)
 - `ANETI_DATA_DIR` (default `/var/lib/aneti`)
+- `ANETI_WEB_DISABLE_AUTH=1` disables token auth (trusted network only)
 
 ## Proxmox One-Line Install (Debian/Ubuntu VM/LXC)
 
@@ -99,6 +100,12 @@ Custom install:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/allisonhere/aNETi/main/scripts/proxmox-install.sh | sudo bash -s -- --repo allisonhere/aNETi --branch main --dir /opt/aneti --web-service --web-port 8787
+```
+
+Disable token auth for trusted internal networks:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/allisonhere/aNETi/main/scripts/proxmox-install.sh | sudo bash -s -- --web-service --web-disable-auth
 ```
 
 ## Proxmox LXC One-Line Create + Install (Run On Proxmox Host)
@@ -124,6 +131,7 @@ Notes:
 - after creation, runs `scripts/proxmox-install.sh` inside the CT
 - writes login details to `/root/aneti-lxc-<vmid>.txt` (override with `--password-file`)
 - installs browser mode by default (`aneti-web.service`)
+- use `--web-disable-auth` if you do not want token prompts
 
 ## Settings Highlights
 

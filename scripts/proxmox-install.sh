@@ -6,7 +6,7 @@ usage() {
 AnetI Proxmox helper installer (Debian/Ubuntu guest)
 
 Usage:
-  proxmox-install.sh [--repo owner/name] [--branch name] [--dir path] [--skip-build] [--web-service]
+  proxmox-install.sh [--repo owner/name] [--branch name] [--dir path] [--skip-build] [--web-service] [--web-disable-auth]
 
 Examples:
   proxmox-install.sh
@@ -22,6 +22,7 @@ WEB_SERVICE=0
 WEB_HOST="0.0.0.0"
 WEB_PORT="8787"
 WEB_DATA_DIR="/var/lib/aneti"
+WEB_DISABLE_AUTH=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -56,6 +57,10 @@ while [ $# -gt 0 ]; do
     --web-data-dir)
       WEB_DATA_DIR="${2:-}"
       shift 2
+      ;;
+    --web-disable-auth)
+      WEB_DISABLE_AUTH=1
+      shift
       ;;
     --help|-h)
       usage
@@ -168,6 +173,7 @@ WorkingDirectory=${INSTALL_DIR}
 Environment=ANETI_WEB_HOST=${WEB_HOST}
 Environment=ANETI_WEB_PORT=${WEB_PORT}
 Environment=ANETI_DATA_DIR=${WEB_DATA_DIR}
+Environment=ANETI_WEB_DISABLE_AUTH=${WEB_DISABLE_AUTH}
 ExecStart=/usr/bin/env npm run start:web
 Restart=always
 RestartSec=2
@@ -204,7 +210,9 @@ EOF
 
 if [ "$WEB_SERVICE" -eq 1 ]; then
   echo "- Web app: http://<ct-ip>:${WEB_PORT}/app"
-  if [ -n "$TOKEN" ]; then
+  if [ "$WEB_DISABLE_AUTH" -eq 1 ]; then
+    echo "- Auth mode: disabled (trusted network only)"
+  elif [ -n "$TOKEN" ]; then
     echo "- API token: ${TOKEN}"
   else
     echo "- API token file: ${SETTINGS_PATH}"
