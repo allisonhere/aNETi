@@ -13,6 +13,8 @@ type DevicesListener = (devices: Device[]) => void;
 type ScannerOptions = {
   intervalMs?: number;
   maxHosts?: number;
+  progressive?: boolean;
+  batchSize?: number;
 };
 
 type Subnet = {
@@ -296,6 +298,7 @@ const deviceId = (ip: string, mac?: string) => (mac ? `mac:${mac}` : `ip:${ip}`)
 const normalizeMac = (mac?: string) => (mac ? mac.toLowerCase().replace(/[^0-9a-f]/g, '') : undefined);
 const macPrefix = (mac?: string) => (mac && mac.length >= 6 ? mac.slice(0, 6) : undefined);
 const formatMacPrefix = (prefix: string) => prefix.match(/.{1,2}/g)?.join(':') ?? prefix;
+const isIpv4 = (value: string) => /^\d{1,3}(\.\d{1,3}){3}$/.test(value);
 
 const vendorCache = new Map<string, string | null>();
 let lastVendorRequestAt = 0;
@@ -342,6 +345,10 @@ export const createScanner = () => {
   let inFlight = false;
   const listeners = new Set<DevicesListener>();
   const hostnameCache = new Map<string, string>();
+  const mdnsNameByIp = new Map<string, string>();
+  let mdnsState: 'idle' | 'starting' | 'ready' | 'failed' = 'idle';
+  let mdnsBonjour: any = null;
+  let mdnsBrowser: any = null;
 
   const emit = () => {
     for (const listener of listeners) {
@@ -365,6 +372,80 @@ export const createScanner = () => {
       devices = next;
       emit();
     }
+  };
+
+  const applyMdnsUpdate = (ip: string, name: string) => {
+    if (!name) return;
+    let changed = false;
+    const next = devices.map((device) => {
+      if (device.ip !== ip) return device;
+      if (device.mdnsName === name) return device;
+      changed = true;
+      const hostname = device.hostname && device.hostname.trim().length > 0 ? device.hostname : name;
+      return { ...device, mdnsName: name, hostname };
+    });
+    if (changed) {
+      devices = next;
+      emit();
+    }
+  };
+
+  const startMdnsBrowser = async () => {
+    if (mdnsState !== 'idle') return;
+    mdnsState = 'starting';
+
+    try {
+      const mod: any = await import('bonjour-service');
+      const Bonjour = mod?.Bonjour ?? mod?.default?.Bonjour ?? mod?.default;
+      if (!Bonjour) throw new Error('Bonjour service not available.');
+
+      mdnsBonjour = new Bonjour();
+      mdnsBrowser = mdnsBonjour.find({});
+
+      const handleService = (service: any) => {
+        const host = typeof service?.host === 'string' ? service.host : null;
+        const name = typeof service?.name === 'string' ? service.name : null;
+        const candidate = host ?? name ?? null;
+        if (!candidate) return;
+
+        const addresses: string[] = Array.isArray(service?.addresses) ? service.addresses : [];
+        const ipv4Addresses = addresses.filter(isIpv4);
+        if (ipv4Addresses.length === 0) return;
+
+        for (const ip of ipv4Addresses) {
+          const existing = mdnsNameByIp.get(ip);
+          if (existing === candidate) continue;
+          mdnsNameByIp.set(ip, candidate);
+          applyMdnsUpdate(ip, candidate);
+        }
+      };
+
+      mdnsBrowser.on('up', handleService);
+      if (typeof mdnsBrowser.start === 'function') {
+        mdnsBrowser.start();
+      }
+
+      mdnsState = 'ready';
+    } catch (error) {
+      mdnsState = 'failed';
+      console.warn('[mdns] Bonjour discovery unavailable.', error);
+    }
+  };
+
+  const stopMdnsBrowser = () => {
+    try {
+      mdnsBrowser?.stop?.();
+    } catch {
+      // ignore
+    }
+    try {
+      mdnsBonjour?.destroy?.();
+    } catch {
+      // ignore
+    }
+    mdnsBrowser = null;
+    mdnsBonjour = null;
+    mdnsState = 'idle';
   };
 
   const enrichDevices = async (plan: EnrichmentPlan) => {
@@ -406,7 +487,10 @@ export const createScanner = () => {
     }
   };
 
-  const scanOnce = async (options: ScannerOptions): Promise<ScanResult> => {
+  const scanOnce = async (
+    options: ScannerOptions,
+    onPartial?: (devices: Device[]) => void
+  ): Promise<ScanResult> => {
     const interfaces = getInterfaces();
     const localInterfaces = getIpv4Interfaces(interfaces);
     const subnets = detectSubnets(localInterfaces);
@@ -430,103 +514,130 @@ export const createScanner = () => {
       };
     }
 
-    const maxHosts = options.maxHosts ?? 256;
-    const hosts = subnets.flatMap((subnet) => expandSubnet(subnet, maxHosts));
-
-    const pingResults = await mapWithConcurrency(hosts, 64, async (ip) => {
-      const latency = await pingHost(ip);
-      return { ip, latency };
-    });
-
-    const arpMap = await readNeighborTable();
-    const seen = new Map<string, { latency?: number | null }>();
-
-    for (const result of pingResults) {
-      if (result.latency !== null) {
-        seen.set(result.ip, { latency: result.latency });
-      }
-    }
-
-    for (const [ip, _mac] of arpMap.entries()) {
-      if (!seen.has(ip)) {
-        seen.set(ip, { latency: null });
-      }
-    }
-
-    for (const subnet of subnets) {
-      if (!seen.has(subnet.localIp)) {
-        seen.set(subnet.localIp, { latency: 0 });
-      }
-    }
-
-    for (const iface of localInterfaces) {
-      if (!seen.has(iface.ip)) {
-        seen.set(iface.ip, { latency: 0 });
-      }
-    }
-
     const existingById = new Map(devices.map((device) => [device.id, device]));
     const existingByIp = new Map(devices.map((device) => [device.ip, device]));
     const timestamp = now();
-    const next: Device[] = [];
+    const seen = new Map<string, { latency?: number | null }>();
+    const maxHosts = options.maxHosts ?? 256;
+    const hosts = subnets.flatMap((subnet) => expandSubnet(subnet, maxHosts));
+    const batchSize = Math.max(16, options.batchSize ?? 64);
+    let arpMap = await readNeighborTable();
 
-    const hostnameLookups: Array<{ ip: string; id: string }> = [];
+    const seedFromArp = () => {
+      for (const [ip] of arpMap.entries()) {
+        if (!seen.has(ip)) {
+          seen.set(ip, { latency: null });
+        }
+      }
+    };
 
-    for (const [ip, meta] of seen.entries()) {
-      const mac = arpMap.get(ip);
-      const id = deviceId(ip, mac);
-      const existing = existingById.get(id) ?? existingByIp.get(ip);
+    const seedLocalIps = () => {
+      for (const subnet of subnets) {
+        if (!seen.has(subnet.localIp)) {
+          seen.set(subnet.localIp, { latency: 0 });
+        }
+      }
+      for (const iface of localInterfaces) {
+        if (!seen.has(iface.ip)) {
+          seen.set(iface.ip, { latency: 0 });
+        }
+      }
+    };
+
+    seedFromArp();
+    seedLocalIps();
+
+    const buildDevicesFromSeen = (includeOffline: boolean, collectEnrichment: boolean): ScanResult => {
+      const next: Device[] = [];
+      const hostnameLookups: Array<{ ip: string; id: string }> = [];
+
+      for (const [ip, meta] of seen.entries()) {
+        const mac = arpMap.get(ip);
+        const id = deviceId(ip, mac);
+        const existing = existingById.get(id) ?? existingByIp.get(ip);
+      const mdnsName = mdnsNameByIp.get(ip);
 
       const record: Device = {
         id,
         ip,
         mac: mac ?? existing?.mac,
-        hostname: existing?.hostname,
+        hostname: existing?.hostname ?? mdnsName,
         vendor: existing?.vendor,
+        mdnsName: existing?.mdnsName ?? mdnsName,
         firstSeen: existing?.firstSeen ?? timestamp,
         lastSeen: timestamp,
         status: 'online',
         latencyMs: meta.latency ?? existing?.latencyMs,
       };
 
-      if (!record.hostname && !hostnameCache.has(ip)) {
-        hostnameLookups.push({ ip, id: record.id });
-      } else if (!record.hostname && hostnameCache.has(ip)) {
-        record.hostname = hostnameCache.get(ip);
+        if (!record.hostname && hostnameCache.has(ip)) {
+          record.hostname = hostnameCache.get(ip);
+        } else if (!record.hostname && collectEnrichment && !hostnameCache.has(ip)) {
+          hostnameLookups.push({ ip, id: record.id });
+        }
+
+        next.push(record);
       }
 
-      next.push(record);
-    }
-
-    const vendorTargets = new Map<string, string[]>();
-    for (const device of next) {
-      if (device.vendor || !device.mac) continue;
-      const normalized = normalizeMac(device.mac);
-      const prefix = macPrefix(normalized);
-      if (!prefix) continue;
-      if (vendorCache.has(prefix)) {
-        const cached = vendorCache.get(prefix);
-        if (cached) device.vendor = cached;
-        continue;
-      }
-      const list = vendorTargets.get(prefix) ?? [];
-      list.push(device.id);
-      vendorTargets.set(prefix, list);
-    }
-
-    const offlineAfter = (options.intervalMs ?? 8000) * 2;
-    for (const device of devices) {
-      if (!next.find((candidate) => candidate.id === device.id)) {
-        if (timestamp - device.lastSeen < offlineAfter) {
-          next.push({ ...device, status: 'offline' });
+      const vendorTargets = new Map<string, string[]>();
+      if (collectEnrichment) {
+        for (const device of next) {
+          if (device.vendor || !device.mac) continue;
+          const normalized = normalizeMac(device.mac);
+          const prefix = macPrefix(normalized);
+          if (!prefix) continue;
+          if (vendorCache.has(prefix)) {
+            const cached = vendorCache.get(prefix);
+            if (cached) device.vendor = cached;
+            continue;
+          }
+          const list = vendorTargets.get(prefix) ?? [];
+          list.push(device.id);
+          vendorTargets.set(prefix, list);
         }
       }
+
+      if (includeOffline) {
+        const offlineAfter = (options.intervalMs ?? 8000) * 2;
+        for (const device of devices) {
+          if (!next.find((candidate) => candidate.id === device.id)) {
+            if (timestamp - device.lastSeen < offlineAfter) {
+              next.push({ ...device, status: 'offline' });
+            }
+          }
+        }
+      }
+
+      return {
+        devices: next.sort((a, b) => b.lastSeen - a.lastSeen),
+        enrichment: { hostnameLookups, vendorTargets },
+      };
+    };
+
+    for (let i = 0; i < hosts.length; i += batchSize) {
+      const batch = hosts.slice(i, i + batchSize);
+      const pingResults = await mapWithConcurrency(batch, 64, async (ip) => {
+        const latency = await pingHost(ip);
+        return { ip, latency };
+      });
+
+      for (const result of pingResults) {
+        if (result.latency !== null) {
+          seen.set(result.ip, { latency: result.latency });
+        }
+      }
+
+      if (options.progressive && onPartial) {
+        const partial = buildDevicesFromSeen(false, false);
+        onPartial(partial.devices);
+      }
     }
 
-    return {
-      devices: next.sort((a, b) => b.lastSeen - a.lastSeen),
-      enrichment: { hostnameLookups, vendorTargets },
-    };
+    arpMap = await readNeighborTable();
+    seedFromArp();
+    seedLocalIps();
+
+    return buildDevicesFromSeen(true, true);
   };
 
   const diagnostics = (options: ScannerOptions = {}): ScannerDiagnostics => {
@@ -553,11 +664,20 @@ export const createScanner = () => {
   const start = (options: ScannerOptions = {}) => {
     if (timer) return devices;
 
+    void startMdnsBrowser();
+
     const run = async () => {
       if (inFlight) return;
       inFlight = true;
       try {
-        const result = await scanOnce(options);
+        const effectiveOptions = {
+          ...options,
+          progressive: options.progressive ?? devices.length === 0,
+        };
+        const result = await scanOnce(effectiveOptions, (partial) => {
+          devices = partial;
+          emit();
+        });
         devices = result.devices;
         emit();
         void enrichDevices(result.enrichment);
@@ -576,6 +696,7 @@ export const createScanner = () => {
       clearInterval(timer);
       timer = null;
     }
+    stopMdnsBrowser();
   };
 
   const list = () => devices;

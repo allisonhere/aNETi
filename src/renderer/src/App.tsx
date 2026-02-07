@@ -1,5 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, Bell, KeyRound, Radar, Router, Settings, ShieldCheck, Sparkles } from 'lucide-react';
+import {
+  Activity,
+  Bell,
+  ChevronDown,
+  ChevronUp,
+  KeyRound,
+  Palette,
+  Radar,
+  Router,
+  Settings,
+  ShieldCheck,
+  Sparkles,
+} from 'lucide-react';
 import { ToastContainer, useToast } from './components/Toast';
 import { cn } from '@/lib/utils';
 
@@ -9,6 +21,8 @@ export type Device = {
   mac?: string;
   hostname?: string;
   vendor?: string;
+  mdnsName?: string;
+  label?: string;
   firstSeen: number;
   lastSeen: number;
   status: 'online' | 'offline';
@@ -27,6 +41,7 @@ type ProviderId = 'openai' | 'gemini' | 'claude';
 
 type SettingsPublic = {
   providers: Record<ProviderId, { hasKey: boolean; last4: string | null }>;
+  accentId?: string | null;
   updatedAt: number;
 };
 
@@ -46,8 +61,29 @@ type AlertRecord = {
   createdAt: number;
 };
 
+type SightingRecord = {
+  id: number;
+  deviceId: string;
+  seenAt: number;
+  ip: string;
+  latencyMs?: number | null;
+  status?: 'online' | 'offline' | null;
+};
+
 const formatTimestamp = (value: number) =>
   new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+const formatDateTime = (value: number) =>
+  new Date(value).toLocaleString([], {
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+
+const scanMaxHosts = 1024;
+const scanIntervalMs = 8000;
 
 function StatCard({ label, value, tone }: { label: string; value: string; tone?: 'good' | 'warn' | 'info' }) {
   return (
@@ -65,6 +101,13 @@ function StatCard({ label, value, tone }: { label: string; value: string; tone?:
 }
 
 export default function App() {
+  type AccentPreset = {
+    id: string;
+    label: string;
+    helper: string;
+    colors: Record<200 | 300 | 400, string>;
+  };
+
   const providerDefs: Array<{ id: ProviderId; label: string; helper: string }> = [
     {
       id: 'openai',
@@ -83,7 +126,41 @@ export default function App() {
     },
   ];
 
+  const accentPresets: AccentPreset[] = [
+    {
+      id: 'emerald',
+      label: 'Emerald',
+      helper: 'Fresh, calm green for focus.',
+      colors: { 200: '167, 243, 208', 300: '110, 231, 183', 400: '52, 211, 153' },
+    },
+    {
+      id: 'sky',
+      label: 'Sky',
+      helper: 'Bright blue highlight for clarity.',
+      colors: { 200: '186, 230, 253', 300: '125, 211, 252', 400: '56, 189, 248' },
+    },
+    {
+      id: 'amber',
+      label: 'Amber',
+      helper: 'Warm amber for visibility.',
+      colors: { 200: '253, 230, 138', 300: '252, 211, 77', 400: '251, 191, 36' },
+    },
+    {
+      id: 'rose',
+      label: 'Rose',
+      helper: 'Soft rose for standout highlights.',
+      colors: { 200: '254, 205, 211', 300: '253, 164, 175', 400: '251, 113, 133' },
+    },
+    {
+      id: 'purple',
+      label: 'Purple',
+      helper: 'Violet glow with a bold accent.',
+      colors: { 200: '221, 214, 254', 300: '196, 181, 253', 400: '167, 139, 250' },
+    },
+  ];
+
   const [devices, setDevices] = useState<Device[]>([]);
+  const [renderDevices, setRenderDevices] = useState<Device[]>([]);
   const [scanning, setScanning] = useState(false);
   const [scanStatus, setScanStatus] = useState<'idle' | 'scanning' | 'ready'>('idle');
   const [bridgeStatus, setBridgeStatus] = useState<'pending' | 'ready' | 'missing'>('pending');
@@ -91,6 +168,16 @@ export default function App() {
   const [view, setView] = useState<'dashboard' | 'settings'>('dashboard');
   const [settings, setSettings] = useState<SettingsPublic | null>(null);
   const [aiSummary, setAiSummary] = useState<AiSummary | null>(null);
+  const [expandedDeviceId, setExpandedDeviceId] = useState<string | null>(null);
+  const [labelDrafts, setLabelDrafts] = useState<Record<string, string>>({});
+  const [savingLabelId, setSavingLabelId] = useState<string | null>(null);
+  const [scanProgressive, setScanProgressive] = useState(true);
+  const [scanBatchSize, setScanBatchSize] = useState(64);
+  const [accentId, setAccentId] = useState<string>('emerald');
+  const [savingAccent, setSavingAccent] = useState(false);
+  const [sightingsById, setSightingsById] = useState<Record<string, SightingRecord[]>>({});
+  const [loadingSightingsId, setLoadingSightingsId] = useState<string | null>(null);
+  const [historyExpandedById, setHistoryExpandedById] = useState<Record<string, boolean>>({});
   const [keyDrafts, setKeyDrafts] = useState<Record<ProviderId, string>>({
     openai: '',
     gemini: '',
@@ -106,6 +193,7 @@ export default function App() {
   const knownIds = useRef(new Set<string>());
   const hydratedFromDb = useRef(false);
   const hasScanResult = useRef(false);
+  const initialScanHandled = useRef(false);
 
   useEffect(() => {
     let unsubscribe: (() => void) | undefined;
@@ -122,18 +210,23 @@ export default function App() {
         const stored = await window.aneti.listStoredDevices();
         if (Array.isArray(stored) && stored.length > 0) {
           setDevices(stored as Device[]);
+          knownIds.current = new Set((stored as Device[]).map((device) => device.id));
           hydratedFromDb.current = true;
           hasScanResult.current = true;
           setScanStatus('ready');
         }
       }
 
-      const diag = await window.aneti.diagnostics({ maxHosts: 128 });
+      const diag = await window.aneti.diagnostics({ maxHosts: scanMaxHosts });
       setDiagnostics(diag as Diagnostics);
 
       const settingsData = await window.aneti.settingsGet();
       if (settingsData) {
-        setSettings(settingsData as SettingsPublic);
+        const data = settingsData as SettingsPublic;
+        setSettings(data);
+        if (data.accentId) {
+          setAccentId(data.accentId);
+        }
       }
 
       const alerts = await window.aneti.listAlerts(20);
@@ -148,7 +241,12 @@ export default function App() {
         }
       }
 
-      await window.aneti.startScan({ intervalMs: 8000, maxHosts: 128 });
+      await window.aneti.startScan({
+        intervalMs: scanIntervalMs,
+        maxHosts: scanMaxHosts,
+        progressive: scanProgressive,
+        batchSize: scanBatchSize,
+      });
       if (!hasScanResult.current) {
         setScanStatus('scanning');
       }
@@ -163,13 +261,36 @@ export default function App() {
         }
 
         const known = knownIds.current;
-        for (const device of list) {
-          if (!known.has(device.id)) {
-            if (known.size > 0) {
-              showToast('info', `New device: ${device.hostname || device.ip}`);
-            }
+        if (!initialScanHandled.current) {
+          const baselineCount = known.size;
+          const newCount = list.filter((device) => !known.has(device.id)).length;
+          for (const device of list) {
             known.add(device.id);
           }
+          initialScanHandled.current = true;
+          if (list.length > 0) {
+            const message =
+              baselineCount > 0
+                ? `Initial scan complete: ${list.length} devices (${newCount} new).`
+                : `Initial scan complete: ${list.length} devices.`;
+            showToast('info', message);
+          }
+          return;
+        }
+
+        const newDevices = list.filter((device) => !known.has(device.id));
+        if (newDevices.length === 0) return;
+
+        if (newDevices.length > 1) {
+          showToast('info', `Scan update: ${list.length} devices (${newDevices.length} new).`);
+        } else {
+          const device = newDevices[0];
+          const name = device.label || device.hostname || device.ip;
+          showToast('info', `New device: ${name}`);
+        }
+
+        for (const device of newDevices) {
+          known.add(device.id);
         }
       });
 
@@ -215,10 +336,70 @@ export default function App() {
     };
   }, [showToast]);
 
+  useEffect(() => {
+    if (!expandedDeviceId) return;
+    const device = devices.find((item) => item.id === expandedDeviceId);
+    if (!device) return;
+    setLabelDrafts((prev) => {
+      if (prev[device.id] !== undefined) return prev;
+      return { ...prev, [device.id]: device.label ?? '' };
+    });
+  }, [expandedDeviceId, devices]);
+
+  useEffect(() => {
+    if (!expandedDeviceId) return;
+    if (!window.aneti?.listSightings) return;
+    if (sightingsById[expandedDeviceId]) return;
+    let cancelled = false;
+    setLoadingSightingsId(expandedDeviceId);
+    window.aneti
+      .listSightings(expandedDeviceId, 20)
+      .then((rows) => {
+        if (cancelled) return;
+        if (Array.isArray(rows)) {
+          setSightingsById((prev) => ({
+            ...prev,
+            [expandedDeviceId]: rows as SightingRecord[],
+          }));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingSightingsId(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [expandedDeviceId, sightingsById]);
+
   const onlineCount = useMemo(
     () => devices.filter((device) => device.status === 'online').length,
     [devices]
   );
+
+  useEffect(() => {
+    setRenderDevices((prev) => {
+      if (!expandedDeviceId) return devices;
+      const prevOrder = prev.map((item) => item.id);
+      const nextById = new Map(devices.map((item) => [item.id, item]));
+      const ordered: Device[] = [];
+
+      for (const id of prevOrder) {
+        const item = nextById.get(id);
+        if (item) {
+          ordered.push(item);
+          nextById.delete(id);
+        }
+      }
+
+      for (const item of nextById.values()) {
+        ordered.push(item);
+      }
+
+      return ordered;
+    });
+  }, [devices, expandedDeviceId]);
 
   const offlineCount = devices.length - onlineCount;
   const lastSeen = devices[0]?.lastSeen;
@@ -233,10 +414,19 @@ export default function App() {
       setScanning(false);
       showToast('info', 'Scanning paused.');
     } else {
-      await window.aneti.startScan({ intervalMs: 8000 });
+      await window.aneti.startScan({
+        intervalMs: scanIntervalMs,
+        maxHosts: scanMaxHosts,
+        progressive: scanProgressive,
+        batchSize: scanBatchSize,
+      });
       setScanning(true);
       showToast('success', 'Scanning resumed.');
     }
+  };
+
+  const toggleDevicePanel = (deviceId: string) => {
+    setExpandedDeviceId((current) => (current === deviceId ? null : deviceId));
   };
 
   const handleSaveKey = async (provider: ProviderId) => {
@@ -265,6 +455,135 @@ export default function App() {
 
   const isElectron = typeof navigator !== 'undefined' && navigator.userAgent.toLowerCase().includes('electron');
   const preloadMeta = typeof window !== 'undefined' ? window.anetiMeta : undefined;
+
+  const applyAccent = (id: string | null) => {
+    if (typeof document === 'undefined') return;
+    const preset = accentPresets.find((item) => item.id === id) ?? accentPresets[0];
+    document.documentElement.style.setProperty('--accent-200-rgb', preset.colors[200]);
+    document.documentElement.style.setProperty('--accent-300-rgb', preset.colors[300]);
+    document.documentElement.style.setProperty('--accent-400-rgb', preset.colors[400]);
+  };
+
+  useEffect(() => {
+    applyAccent(accentId);
+  }, [accentId]);
+
+  const extractSuggestedName = (text?: string | null) => {
+    if (!text) return null;
+    const match = text.match(/["“”']([^"“”']{2,64})["“”']/);
+    if (!match) return null;
+    const candidate = match[1].trim();
+    if (!candidate) return null;
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(candidate)) return null;
+    return candidate;
+  };
+
+  const suggestedName = useMemo(() => extractSuggestedName(aiSummary?.text ?? null), [aiSummary?.text]);
+  const suggestedDevice = useMemo(
+    () => (aiSummary?.deviceId ? devices.find((device) => device.id === aiSummary.deviceId) : undefined),
+    [aiSummary?.deviceId, devices]
+  );
+
+  const copyText = async (value: string, label?: string) => {
+    if (!value || value.trim().length === 0) {
+      showToast('info', 'No value to copy.');
+      return;
+    }
+    const message = label ? `Copied ${label}.` : 'Copied to clipboard.';
+    try {
+      if (window.aneti?.copyText) {
+        window.aneti.copyText(value);
+        showToast('success', message);
+        return;
+      } else if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value);
+        showToast('success', message);
+        return;
+      }
+    } catch {
+      // fall through to legacy copy
+    }
+    try {
+      const textarea = document.createElement('textarea');
+      textarea.value = value;
+      textarea.style.position = 'fixed';
+      textarea.style.top = '-9999px';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(textarea);
+      if (ok) {
+        showToast('success', message);
+        return;
+      }
+    } catch {
+      // ignore
+    }
+    showToast('error', 'Failed to copy.');
+  };
+
+  const deviceSummary = (device: Device) =>
+    [
+      `Device: ${device.label || device.hostname || 'Unknown device'}`,
+      `Label: ${device.label || '—'}`,
+      `IP: ${device.ip}`,
+      `MAC: ${device.mac || 'Unknown'}`,
+      `Vendor: ${device.vendor || 'Unknown'}`,
+      `mDNS: ${device.mdnsName || '—'}`,
+      `First seen: ${formatDateTime(device.firstSeen)}`,
+      `Last seen: ${formatDateTime(device.lastSeen)}`,
+      `Status: ${device.status}`,
+      `Latency: ${device.latencyMs ? `${device.latencyMs} ms` : '—'}`,
+    ].join('\n');
+
+  const updateDeviceLabel = async (deviceId: string, label: string | null) => {
+    if (!window.aneti?.updateDeviceLabel) {
+      showToast('error', 'Device rename unavailable.');
+      return;
+    }
+    setSavingLabelId(deviceId);
+    const normalized = label && label.trim().length > 0 ? label.trim() : null;
+    const result = await window.aneti.updateDeviceLabel(deviceId, normalized);
+    if (result) {
+      setDevices((prev) =>
+        prev.map((device) =>
+          device.id === deviceId ? { ...device, label: normalized ?? undefined } : device
+        )
+      );
+      setLabelDrafts((prev) => {
+        const next = { ...prev };
+        if (normalized) {
+          next[deviceId] = normalized;
+        } else {
+          delete next[deviceId];
+        }
+        return next;
+      });
+      showToast('success', normalized ? 'Device label saved.' : 'Device label cleared.');
+    }
+    setSavingLabelId(null);
+  };
+
+  const toggleHistory = (deviceId: string) => {
+    setHistoryExpandedById((prev) => ({ ...prev, [deviceId]: !prev[deviceId] }));
+  };
+
+  const handleAccentChange = async (id: string) => {
+    setAccentId(id);
+    if (!window.aneti?.settingsUpdateAccent) {
+      showToast('error', 'Accent settings unavailable.');
+      return;
+    }
+    setSavingAccent(true);
+    const updated = await window.aneti.settingsUpdateAccent(id);
+    if (updated) {
+      setSettings(updated as SettingsPublic);
+      showToast('success', 'Accent updated.');
+    }
+    setSavingAccent(false);
+  };
 
   return (
     <div className="min-h-screen bg-[#070b1a] text-white">
@@ -406,36 +725,265 @@ export default function App() {
                     ))}
 
                   {scanStatus !== 'scanning' &&
-                    devices.map((device) => (
-                      <div
-                        key={device.id}
-                        className={cn(
-                          'device-card flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3',
-                          device.status === 'online' ? 'device-card--online' : 'device-card--offline'
-                        )}
-                      >
-                        <div className="flex items-center gap-3">
-                          <div className={cn('device-accent', device.status === 'online' ? 'device-accent--online' : 'device-accent--offline')} />
-                          <div>
-                            <div className="text-sm font-medium text-white">
-                              {device.hostname || 'Unknown device'}
+                    renderDevices.map((device) => {
+                      const isExpanded = expandedDeviceId === device.id;
+                      return (
+                        <div key={device.id} className="device-stack">
+                          <div
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => toggleDevicePanel(device.id)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter' || event.key === ' ') {
+                                event.preventDefault();
+                                toggleDevicePanel(device.id);
+                              }
+                            }}
+                            className={cn(
+                              'device-card device-card--interactive flex items-center justify-between rounded-2xl border border-white/10 bg-white/5 px-4 py-3',
+                              device.status === 'online' ? 'device-card--online' : 'device-card--offline'
+                            )}
+                          >
+                            <div className="flex items-center gap-3">
+                              <div className={cn('device-accent', device.status === 'online' ? 'device-accent--online' : 'device-accent--offline')} />
+                              <div>
+                                <div className="text-sm font-medium text-white">
+                                  {device.label || device.hostname || 'Unknown device'}
+                                </div>
+                                <div className="text-xs text-white/50">
+                                  <span className="device-tag">{device.ip}</span>
+                                  <span className="device-tag">{device.vendor || 'Unknown vendor'}</span>
+                                  {device.label && device.hostname && (
+                                    <span className="device-tag">{device.hostname}</span>
+                                  )}
+                                  {!device.label && device.mdnsName && device.mdnsName !== device.hostname && (
+                                    <span className="device-tag">{device.mdnsName}</span>
+                                  )}
+                                </div>
+                              </div>
                             </div>
-                            <div className="text-xs text-white/50">
-                              <span className="device-tag">{device.ip}</span>
-                              <span className="device-tag">{device.vendor || 'Unknown vendor'}</span>
+                            <div className="device-meta text-right text-xs text-white/60">
+                              <div className="device-tag device-tag--latency">
+                                {device.latencyMs ? `${device.latencyMs} ms` : '—'}
+                              </div>
+                              <div className={cn('device-tag', device.status === 'online' ? 'device-tag--ok' : 'device-tag--warn')}>
+                                {device.status}
+                              </div>
+                              <div className="device-toggle">
+                                {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                              </div>
                             </div>
                           </div>
+
+                          {isExpanded && (
+                            <div className="device-panel">
+                              <div className="detail-row">
+                                <div className="detail-label">Label</div>
+                                <button
+                                  type="button"
+                                  onClick={() => copyText(device.label || '')}
+                                  className="detail-value detail-value--copy"
+                                  title="Click to copy"
+                                >
+                                  {device.label || 'Not set'}
+                                </button>
+                              </div>
+                              <div className="detail-row">
+                                <div className="detail-label">IP Address</div>
+                                <button
+                                  type="button"
+                                  onClick={() => copyText(device.ip)}
+                                  className="detail-value detail-value--copy"
+                                  title="Click to copy"
+                                >
+                                  {device.ip}
+                                </button>
+                              </div>
+                              <div className="detail-row">
+                                <div className="detail-label">MAC Address</div>
+                                <button
+                                  type="button"
+                                  onClick={() => copyText(device.mac || '')}
+                                  className="detail-value detail-value--copy"
+                                  title="Click to copy"
+                                >
+                                  {device.mac || 'Unknown'}
+                                </button>
+                              </div>
+                              <div className="detail-row">
+                                <div className="detail-label">Hostname</div>
+                                <button
+                                  type="button"
+                                  onClick={() => copyText(device.hostname || '')}
+                                  className="detail-value detail-value--copy"
+                                  title="Click to copy"
+                                >
+                                  {device.hostname || 'Unknown'}
+                                </button>
+                              </div>
+                              <div className="detail-row">
+                                <div className="detail-label">mDNS Name</div>
+                                <button
+                                  type="button"
+                                  onClick={() => copyText(device.mdnsName || '')}
+                                  className="detail-value detail-value--copy"
+                                  title="Click to copy"
+                                >
+                                  {device.mdnsName || 'Unknown'}
+                                </button>
+                              </div>
+                              <div className="detail-row">
+                                <div className="detail-label">Vendor</div>
+                                <button
+                                  type="button"
+                                  onClick={() => copyText(device.vendor || '')}
+                                  className="detail-value detail-value--copy"
+                                  title="Click to copy"
+                                >
+                                  {device.vendor || 'Unknown'}
+                                </button>
+                              </div>
+                              <div className="detail-row">
+                                <div className="detail-label">First Seen</div>
+                                <button
+                                  type="button"
+                                  onClick={() => copyText(formatDateTime(device.firstSeen))}
+                                  className="detail-value detail-value--copy"
+                                  title="Click to copy"
+                                >
+                                  {formatDateTime(device.firstSeen)}
+                                </button>
+                              </div>
+                              <div className="detail-row">
+                                <div className="detail-label">Last Seen</div>
+                                <button
+                                  type="button"
+                                  onClick={() => copyText(formatDateTime(device.lastSeen))}
+                                  className="detail-value detail-value--copy"
+                                  title="Click to copy"
+                                >
+                                  {formatDateTime(device.lastSeen)}
+                                </button>
+                              </div>
+                              <div className="detail-history">
+                                <div className="detail-history-header">
+                                  <div className="detail-label">Recent sightings</div>
+                                  <button
+                                    type="button"
+                                    className="detail-action detail-action--ghost"
+                                    onClick={() => toggleHistory(device.id)}
+                                  >
+                                    {historyExpandedById[device.id] ? 'Hide' : 'Show'}
+                                  </button>
+                                </div>
+                                {historyExpandedById[device.id] && (
+                                  <>
+                                    {loadingSightingsId === device.id && (
+                                      <div className="detail-history-empty">Loading…</div>
+                                    )}
+                                    {loadingSightingsId !== device.id &&
+                                      (sightingsById[device.id]?.length ? (
+                                        <>
+                                          <div className="detail-history-spark">
+                                            {sightingsById[device.id]
+                                              ?.slice(0, 16)
+                                              .map((sighting) => {
+                                                const status =
+                                                  sighting.status ??
+                                                  (sighting.latencyMs ? 'online' : 'offline');
+                                                return (
+                                                  <span
+                                                    key={sighting.id}
+                                                    className={cn(
+                                                      'detail-history-dot',
+                                                      status === 'online'
+                                                        ? 'detail-history-dot--online'
+                                                        : 'detail-history-dot--offline'
+                                                    )}
+                                                    title={`${formatTimestamp(sighting.seenAt)} · ${status}`}
+                                                  />
+                                                );
+                                              })}
+                                          </div>
+                                          <div className="detail-history-list">
+                                            {sightingsById[device.id]?.map((sighting) => {
+                                              const status =
+                                                sighting.status ??
+                                                (sighting.latencyMs ? 'online' : 'offline');
+                                              return (
+                                                <div key={sighting.id} className="detail-history-row">
+                                                  <div>{formatTimestamp(sighting.seenAt)}</div>
+                                                  <div className="detail-history-ip">{sighting.ip}</div>
+                                                  <div className="detail-history-latency">
+                                                    {sighting.latencyMs ? `${sighting.latencyMs} ms` : '—'}
+                                                  </div>
+                                                  <div
+                                                    className={cn(
+                                                      'detail-history-status',
+                                                      status === 'online'
+                                                        ? 'detail-history-status--online'
+                                                        : 'detail-history-status--offline'
+                                                    )}
+                                                  >
+                                                    {status}
+                                                  </div>
+                                                </div>
+                                              );
+                                            })}
+                                          </div>
+                                        </>
+                                      ) : (
+                                        <div className="detail-history-empty">No sightings yet.</div>
+                                      ))}
+                                  </>
+                                )}
+                              </div>
+                              <div className="detail-edit">
+                                <div className="detail-label">Rename device</div>
+                                <div className="detail-edit-row">
+                                  <input
+                                    className="detail-input"
+                                    placeholder="Set a friendly label"
+                                    value={labelDrafts[device.id] ?? ''}
+                                    onChange={(event) =>
+                                      setLabelDrafts((prev) => ({
+                                        ...prev,
+                                        [device.id]: event.target.value,
+                                      }))
+                                    }
+                                  />
+                                  <button
+                                    type="button"
+                                    className="detail-action"
+                                    onClick={() => updateDeviceLabel(device.id, labelDrafts[device.id] ?? '')}
+                                    disabled={savingLabelId === device.id}
+                                  >
+                                    {savingLabelId === device.id ? 'Saving…' : 'Save'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="detail-action detail-action--ghost"
+                                    onClick={() => updateDeviceLabel(device.id, null)}
+                                    disabled={savingLabelId === device.id || !device.label}
+                                  >
+                                    Clear
+                                  </button>
+                                </div>
+                              </div>
+                              <div className="detail-actions">
+                                <button
+                                  type="button"
+                                  className="detail-copy-button"
+                                  onClick={() => copyText(deviceSummary(device))}
+                                >
+                                  Copy device summary
+                                </button>
+                              </div>
+                            </div>
+                          )}
                         </div>
-                        <div className="text-right text-xs text-white/60">
-                          <div className="device-tag device-tag--latency">
-                            {device.latencyMs ? `${device.latencyMs} ms` : '—'}
-                          </div>
-                          <div className={cn('device-tag', device.status === 'online' ? 'device-tag--ok' : 'device-tag--warn')}>
-                            {device.status}
-                          </div>
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                 </div>
               </div>
 
@@ -468,6 +1016,22 @@ export default function App() {
                         ? 'Awaiting the next event to summarize.'
                         : 'Add an API key in Settings to enable AI summaries.'}
                   </p>
+                  {suggestedName && aiSummary?.deviceId && (
+                    <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-white/60">
+                      <span>Suggested label:</span>
+                      <span className="device-tag">{suggestedName}</span>
+                      {suggestedDevice?.label && (
+                        <span className="text-white/40">Current: {suggestedDevice.label}</span>
+                      )}
+                      <button
+                        type="button"
+                        className="detail-action detail-action--ghost"
+                        onClick={() => updateDeviceLabel(aiSummary.deviceId as string, suggestedName)}
+                      >
+                        Apply suggested name
+                      </button>
+                    </div>
+                  )}
                   {aiSummary?.createdAt && (
                     <div className="mt-3 text-xs text-white/50">
                       Updated {formatTimestamp(aiSummary.createdAt)}
@@ -581,6 +1145,99 @@ export default function App() {
                   </div>
                 );
               })}
+            </div>
+
+            <div className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur">
+              <div className="flex items-center gap-3">
+                <div className="rounded-2xl bg-white/10 p-3">
+                  <Radar className="h-5 w-5 text-sky-300" />
+                </div>
+                <div>
+                  <div className="text-xs uppercase tracking-[0.3em] text-white/50">Scan Settings</div>
+                  <h2 className="mt-2 text-lg font-semibold">Discovery behavior</h2>
+                </div>
+              </div>
+              <p className="mt-3 text-sm text-white/60 max-w-xl">
+                Progressive updates stream devices as they’re found. Batch size controls how often
+                partial results are emitted.
+              </p>
+
+              <div className="scan-settings">
+                <div className="scan-setting-row">
+                  <div>
+                    <div className="scan-setting-label">Progressive updates</div>
+                    <div className="scan-setting-help">Show devices during the scan instead of waiting for the full sweep.</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setScanProgressive((prev) => !prev)}
+                    className={cn('toggle-button', scanProgressive && 'toggle-button--on')}
+                  >
+                    {scanProgressive ? 'On' : 'Off'}
+                  </button>
+                </div>
+
+                <div className="scan-setting-row">
+                  <div>
+                    <div className="scan-setting-label">Batch size</div>
+                    <div className="scan-setting-help">Lower values update more often. Higher values scan faster.</div>
+                  </div>
+                  <input
+                    type="number"
+                    min={16}
+                    max={256}
+                    step={8}
+                    value={scanBatchSize}
+                    onChange={(event) => {
+                      const parsed = Number(event.target.value);
+                      if (!Number.isFinite(parsed)) return;
+                      const clamped = Math.min(256, Math.max(16, Math.round(parsed)));
+                      setScanBatchSize(clamped);
+                    }}
+                    className="detail-input scan-batch-input"
+                  />
+                </div>
+                <div className="scan-setting-note">Changes apply on the next scan start/resume.</div>
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur">
+              <div className="flex items-center gap-3">
+                <div className="rounded-2xl bg-white/10 p-3">
+                  <Palette className="h-5 w-5 text-sky-300" />
+                </div>
+                <div>
+                  <div className="text-xs uppercase tracking-[0.3em] text-white/50">Appearance</div>
+                  <h2 className="mt-2 text-lg font-semibold">Accent color</h2>
+                </div>
+              </div>
+              <p className="mt-3 text-sm text-white/60 max-w-xl">
+                Choose a highlight color for status indicators, device accents, and badges.
+              </p>
+
+              <div className="accent-grid">
+                {accentPresets.map((preset) => {
+                  const isActive = accentId === preset.id;
+                  return (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      className={cn('accent-card', isActive && 'accent-card--active')}
+                      onClick={() => handleAccentChange(preset.id)}
+                      disabled={savingAccent}
+                    >
+                      <div
+                        className="accent-swatch"
+                        style={{ backgroundColor: `rgb(${preset.colors[400]})` }}
+                      />
+                      <div className="accent-info">
+                        <div className="accent-label">{preset.label}</div>
+                        <div className="accent-helper">{preset.helper}</div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             <div className="rounded-3xl border border-white/10 bg-gradient-to-br from-emerald-500/10 via-blue-500/5 to-transparent p-6">

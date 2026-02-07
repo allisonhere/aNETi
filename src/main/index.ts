@@ -16,6 +16,7 @@ const baselineDeviceIds = new Set<string>();
 const lastStatusById = new Map<string, Device['status']>();
 const lastSummaryAtById = new Map<string, number>();
 const lastSeenById = new Map<string, number>();
+const labelById = new Map<string, string>();
 const aiQueue: Device[] = [];
 let aiWorking = false;
 const aiSummaryCooldownMs = 60_000;
@@ -137,11 +138,16 @@ const createMainWindow = () => {
   });
 
   scanner.onDevices((devices) => {
-    db?.syncDevices(devices as Device[]);
-    mainWindow?.webContents.send('scanner:devices', devices);
+    const labeledDevices = (devices as Device[]).map((device) => {
+      const label = labelById.get(device.id);
+      return label ? { ...device, label } : device;
+    });
+
+    db?.syncDevices(labeledDevices as Device[]);
+    mainWindow?.webContents.send('scanner:devices', labeledDevices);
 
     const now = Date.now();
-    for (const device of devices as Device[]) {
+    for (const device of labeledDevices as Device[]) {
       const prevStatus = lastStatusById.get(device.id);
       const prevSeen = lastSeenById.get(device.id);
       lastStatusById.set(device.id, device.status);
@@ -184,9 +190,26 @@ app.whenReady().then(() => {
   ipcMain.handle('scanner:diagnostics', (_event, options) => scanner.diagnostics(options));
   ipcMain.handle('db:devices', () => db?.listDevices() ?? []);
   ipcMain.handle('db:alerts', (_event, limit?: number) => db?.listAlerts(limit ?? 50) ?? []);
+  ipcMain.handle('db:sightings', (_event, deviceId: string, limit?: number) =>
+    db?.listSightingsByDevice(deviceId, limit ?? 30) ?? []
+  );
+  ipcMain.handle('db:label', (_event, id: string, label: string | null) => {
+    if (!db) return null;
+    const normalized = label && label.trim().length > 0 ? label.trim() : null;
+    const result = db.updateDeviceLabel(id, normalized);
+    if (normalized) {
+      labelById.set(id, normalized);
+    } else {
+      labelById.delete(id);
+    }
+    return result;
+  });
   ipcMain.handle('settings:get', () => settings?.getPublic() ?? null);
   ipcMain.handle('settings:update', (_event, provider: ProviderId, key: string | null) =>
     settings?.updateProvider(provider, key) ?? null
+  );
+  ipcMain.handle('settings:accent', (_event, accentId: string | null) =>
+    settings?.updateAccent(accentId) ?? null
   );
 
   app.on('activate', () => {
@@ -199,6 +222,9 @@ app.whenReady().then(() => {
     const existing = db?.listDevices() ?? [];
     for (const device of existing as Device[]) {
       baselineDeviceIds.add(device.id);
+      if (device.label) {
+        labelById.set(device.id, device.label);
+      }
     }
   };
 

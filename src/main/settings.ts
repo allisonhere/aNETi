@@ -5,16 +5,19 @@ export type ProviderId = 'openai' | 'gemini' | 'claude';
 
 type SettingsFile = {
   providers: Partial<Record<ProviderId, string>>;
+  accentId?: string | null;
   updatedAt: number;
 };
 
 export type SettingsPublic = {
   providers: Record<ProviderId, { hasKey: boolean; last4: string | null }>;
+  accentId?: string | null;
   updatedAt: number;
 };
 
 const defaultSettings = (): SettingsFile => ({
   providers: {},
+  accentId: null,
   updatedAt: Date.now(),
 });
 
@@ -36,6 +39,7 @@ const scrubSettings = (settings: SettingsFile): SettingsPublic => {
       gemini: toMeta(providers.gemini),
       claude: toMeta(providers.claude),
     },
+    accentId: settings.accentId ?? null,
     updatedAt: settings.updatedAt,
   };
 };
@@ -54,6 +58,7 @@ export const createSettingsStore = (filePath: string) => {
       const parsed = JSON.parse(raw) as SettingsFile;
       cache = {
         providers: parsed.providers ?? {},
+        accentId: parsed.accentId ?? null,
         updatedAt: parsed.updatedAt ?? Date.now(),
       };
       return cache;
@@ -86,11 +91,22 @@ export const createSettingsStore = (filePath: string) => {
     return scrubSettings(settings);
   };
 
+  const updateAccent = (accentId: string | null) => {
+    const settings = load();
+    const normalized = accentId && accentId.trim().length > 0 ? accentId.trim() : null;
+    settings.accentId = normalized;
+    settings.updatedAt = Date.now();
+    cache = settings;
+    persist(settings);
+    return scrubSettings(settings);
+  };
+
   const getSecret = (provider: ProviderId) => load().providers[provider];
 
   return {
     getPublic,
     updateProvider,
+    updateAccent,
     getSecret,
   };
 };

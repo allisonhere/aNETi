@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { clipboard, contextBridge, ipcRenderer } = require('electron');
 
 const preloadVersion = '0.1.0-dev';
 
@@ -26,6 +26,10 @@ contextBridge.exposeInMainWorld('aneti', {
   },
   listStoredDevices: () => ipcRenderer.invoke('db:devices'),
   listAlerts: (limit) => ipcRenderer.invoke('db:alerts', limit),
+  listSightings: (deviceId, limit) => ipcRenderer.invoke('db:sightings', deviceId, limit),
+  updateDeviceLabel: (id, label) => ipcRenderer.invoke('db:label', id, label),
   settingsGet: () => ipcRenderer.invoke('settings:get'),
   settingsUpdate: (provider, key) => ipcRenderer.invoke('settings:update', provider, key),
+  settingsUpdateAccent: (accentId) => ipcRenderer.invoke('settings:accent', accentId),
+  copyText: (value) => clipboard.writeText(String(value || '')),
 });

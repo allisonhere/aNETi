@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { clipboard, contextBridge, ipcRenderer } from 'electron';
 
 const preloadVersion = '0.1.0';
 
@@ -26,7 +26,12 @@ contextBridge.exposeInMainWorld('aneti', {
   },
   listStoredDevices: () => ipcRenderer.invoke('db:devices'),
   listAlerts: (limit?: number) => ipcRenderer.invoke('db:alerts', limit),
+  listSightings: (deviceId: string, limit?: number) =>
+    ipcRenderer.invoke('db:sightings', deviceId, limit),
+  updateDeviceLabel: (id: string, label: string | null) => ipcRenderer.invoke('db:label', id, label),
   settingsGet: () => ipcRenderer.invoke('settings:get'),
   settingsUpdate: (provider: 'openai' | 'gemini' | 'claude', key: string | null) =>
     ipcRenderer.invoke('settings:update', provider, key),
+  settingsUpdateAccent: (accentId: string | null) => ipcRenderer.invoke('settings:accent', accentId),
+  copyText: (value: string) => clipboard.writeText(String(value ?? '')),
 });
