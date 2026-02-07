@@ -38,9 +38,18 @@ contextBridge.exposeInMainWorld('aneti', {
   settingsUpdate: (provider: 'openai' | 'gemini' | 'claude', key: string | null) =>
     ipcRenderer.invoke('settings:update', provider, key),
   settingsUpdateAccent: (accentId: string | null) => ipcRenderer.invoke('settings:accent', accentId),
-  settingsUpdateAlerts: (patch: { osNotifications?: boolean; unknownOnly?: boolean }) =>
+  settingsUpdateAlerts: (patch: {
+    osNotifications?: boolean;
+    unknownOnly?: boolean;
+    startupWarmupMs?: number;
+    globalCooldownMs?: number;
+    perDeviceCooldownMs?: number;
+  }) =>
     ipcRenderer.invoke('settings:alerts', patch),
   settingsSetDeviceMuted: (deviceId: string, muted: boolean) =>
     ipcRenderer.invoke('settings:mute-device', deviceId, muted),
+  settingsSetDeviceTrusted: (deviceId: string, trusted: boolean) =>
+    ipcRenderer.invoke('settings:trust-device', deviceId, trusted),
+  settingsTestNotification: () => ipcRenderer.invoke('settings:test-notification'),
   copyText: (value: string) => clipboard.writeText(String(value ?? '')),
 });

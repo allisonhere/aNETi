@@ -33,5 +33,7 @@ contextBridge.exposeInMainWorld('aneti', {
   settingsUpdateAccent: (accentId) => ipcRenderer.invoke('settings:accent', accentId),
   settingsUpdateAlerts: (patch) => ipcRenderer.invoke('settings:alerts', patch),
   settingsSetDeviceMuted: (deviceId, muted) => ipcRenderer.invoke('settings:mute-device', deviceId, muted),
+  settingsSetDeviceTrusted: (deviceId, trusted) => ipcRenderer.invoke('settings:trust-device', deviceId, trusted),
+  settingsTestNotification: () => ipcRenderer.invoke('settings:test-notification'),
   copyText: (value) => clipboard.writeText(String(value || '')),
 });

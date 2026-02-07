@@ -6,13 +6,21 @@ export type ProviderId = 'openai' | 'gemini' | 'claude';
 export type AlertSettings = {
   osNotifications: boolean;
   unknownOnly: boolean;
+  startupWarmupMs: number;
+  globalCooldownMs: number;
+  perDeviceCooldownMs: number;
   mutedDeviceIds: string[];
+};
+
+export type SecuritySettings = {
+  trustedDeviceIds: string[];
 };
 
 type SettingsFile = {
   providers: Partial<Record<ProviderId, string>>;
   accentId?: string | null;
   alerts?: AlertSettings;
+  security?: SecuritySettings;
   updatedAt: number;
 };
 
@@ -20,20 +28,48 @@ export type SettingsPublic = {
   providers: Record<ProviderId, { hasKey: boolean; last4: string | null }>;
   accentId?: string | null;
   alerts: AlertSettings;
+  security: SecuritySettings;
   updatedAt: number;
 };
 
 const defaultAlerts = (): AlertSettings => ({
   osNotifications: true,
   unknownOnly: true,
+  startupWarmupMs: 45_000,
+  globalCooldownMs: 20_000,
+  perDeviceCooldownMs: 60_000,
   mutedDeviceIds: [],
+});
+
+const defaultSecurity = (): SecuritySettings => ({
+  trustedDeviceIds: [],
 });
 
 const normalizeAlerts = (alerts?: Partial<AlertSettings> | null): AlertSettings => ({
   osNotifications: alerts?.osNotifications ?? true,
   unknownOnly: alerts?.unknownOnly ?? true,
+  startupWarmupMs:
+    typeof alerts?.startupWarmupMs === 'number'
+      ? Math.min(Math.max(Math.round(alerts.startupWarmupMs), 0), 300_000)
+      : 45_000,
+  globalCooldownMs:
+    typeof alerts?.globalCooldownMs === 'number'
+      ? Math.min(Math.max(Math.round(alerts.globalCooldownMs), 5_000), 300_000)
+      : 20_000,
+  perDeviceCooldownMs:
+    typeof alerts?.perDeviceCooldownMs === 'number'
+      ? Math.min(Math.max(Math.round(alerts.perDeviceCooldownMs), 5_000), 600_000)
+      : 60_000,
   mutedDeviceIds: Array.isArray(alerts?.mutedDeviceIds)
     ? alerts?.mutedDeviceIds
+        .map((id) => String(id).trim())
+        .filter(Boolean)
+    : [],
+});
+
+const normalizeSecurity = (security?: Partial<SecuritySettings> | null): SecuritySettings => ({
+  trustedDeviceIds: Array.isArray(security?.trustedDeviceIds)
+    ? security?.trustedDeviceIds
         .map((id) => String(id).trim())
         .filter(Boolean)
     : [],
@@ -43,6 +79,7 @@ const defaultSettings = (): SettingsFile => ({
   providers: {},
   accentId: null,
   alerts: defaultAlerts(),
+  security: defaultSecurity(),
   updatedAt: Date.now(),
 });
 
@@ -66,6 +103,7 @@ const scrubSettings = (settings: SettingsFile): SettingsPublic => {
     },
     accentId: settings.accentId ?? null,
     alerts: normalizeAlerts(settings.alerts),
+    security: normalizeSecurity(settings.security),
     updatedAt: settings.updatedAt,
   };
 };
@@ -86,6 +124,7 @@ export const createSettingsStore = (filePath: string) => {
         providers: parsed.providers ?? {},
         accentId: parsed.accentId ?? null,
         alerts: normalizeAlerts(parsed.alerts),
+        security: normalizeSecurity(parsed.security),
         updatedAt: parsed.updatedAt ?? Date.now(),
       };
       return cache;
@@ -128,14 +167,21 @@ export const createSettingsStore = (filePath: string) => {
     return scrubSettings(settings);
   };
 
-  const updateAlerts = (patch: Partial<Pick<AlertSettings, 'osNotifications' | 'unknownOnly'>>) => {
+  const updateAlerts = (
+    patch: Partial<
+      Pick<
+        AlertSettings,
+        'osNotifications' | 'unknownOnly' | 'startupWarmupMs' | 'globalCooldownMs' | 'perDeviceCooldownMs'
+      >
+    >
+  ) => {
     const settings = load();
     const current = normalizeAlerts(settings.alerts);
-    settings.alerts = {
+    settings.alerts = normalizeAlerts({
       ...current,
       ...patch,
       mutedDeviceIds: current.mutedDeviceIds,
-    };
+    });
     settings.updatedAt = Date.now();
     cache = settings;
     persist(settings);
@@ -166,6 +212,29 @@ export const createSettingsStore = (filePath: string) => {
 
   const getAlerts = () => normalizeAlerts(load().alerts);
 
+  const setDeviceTrusted = (deviceId: string, trusted: boolean) => {
+    const id = deviceId.trim();
+    if (!id) return scrubSettings(load());
+
+    const settings = load();
+    const current = normalizeSecurity(settings.security);
+    const trustedIds = new Set(current.trustedDeviceIds);
+    if (trusted) {
+      trustedIds.add(id);
+    } else {
+      trustedIds.delete(id);
+    }
+    settings.security = {
+      trustedDeviceIds: Array.from(trustedIds),
+    };
+    settings.updatedAt = Date.now();
+    cache = settings;
+    persist(settings);
+    return scrubSettings(settings);
+  };
+
+  const getSecurity = () => normalizeSecurity(load().security);
+
   const getSecret = (provider: ProviderId) => load().providers[provider];
 
   return {
@@ -175,6 +244,8 @@ export const createSettingsStore = (filePath: string) => {
     updateAlerts,
     setDeviceMuted,
     getAlerts,
+    setDeviceTrusted,
+    getSecurity,
     getSecret,
   };
 };

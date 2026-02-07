@@ -8,6 +8,7 @@ export type Device = {
   vendor?: string;
   mdnsName?: string;
   label?: string;
+  securityState?: 'trusted' | 'anomaly' | null;
   firstSeen: number;
   lastSeen: number;
   status: DeviceStatus;

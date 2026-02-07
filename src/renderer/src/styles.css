@@ -233,6 +233,11 @@ button {
   border-color: rgba(148, 163, 184, 0.6);
   color: #e2e8f0;
 }
+.detail-inline-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
 .scan-settings {
   margin-top: 1.2rem;
   display: flex;
@@ -576,6 +581,13 @@ button {
   border-color: rgba(248, 113, 113, 0.4);
   color: #fda4af;
   background: rgba(248, 113, 113, 0.12);
+}
+.device-tag--security-anomaly {
+  border-color: rgba(251, 113, 133, 0.5);
+  color: #fda4af;
+  background: rgba(225, 29, 72, 0.16);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 .skeleton-card {
   position: relative;

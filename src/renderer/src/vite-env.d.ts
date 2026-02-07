@@ -25,8 +25,16 @@ declare global {
       settingsGet: () => Promise<unknown>;
       settingsUpdate: (provider: 'openai' | 'gemini' | 'claude', key: string | null) => Promise<unknown>;
       settingsUpdateAccent: (accentId: string | null) => Promise<unknown>;
-      settingsUpdateAlerts: (patch: { osNotifications?: boolean; unknownOnly?: boolean }) => Promise<unknown>;
+      settingsUpdateAlerts: (patch: {
+        osNotifications?: boolean;
+        unknownOnly?: boolean;
+        startupWarmupMs?: number;
+        globalCooldownMs?: number;
+        perDeviceCooldownMs?: number;
+      }) => Promise<unknown>;
       settingsSetDeviceMuted: (deviceId: string, muted: boolean) => Promise<unknown>;
+      settingsSetDeviceTrusted: (deviceId: string, trusted: boolean) => Promise<unknown>;
+      settingsTestNotification: () => Promise<unknown>;
       copyText: (value: string) => void;
     };
   }

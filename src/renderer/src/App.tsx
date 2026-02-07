@@ -23,6 +23,7 @@ export type Device = {
   vendor?: string;
   mdnsName?: string;
   label?: string;
+  securityState?: 'trusted' | 'anomaly' | null;
   firstSeen: number;
   lastSeen: number;
   status: 'online' | 'offline';
@@ -45,7 +46,13 @@ type SettingsPublic = {
   alerts: {
     osNotifications: boolean;
     unknownOnly: boolean;
+    startupWarmupMs: number;
+    globalCooldownMs: number;
+    perDeviceCooldownMs: number;
     mutedDeviceIds: string[];
+  };
+  security: {
+    trustedDeviceIds: string[];
   };
   updatedAt: number;
 };
@@ -196,6 +203,13 @@ export default function App() {
   const [savingProvider, setSavingProvider] = useState<ProviderId | null>(null);
   const [savingAlertPrefs, setSavingAlertPrefs] = useState(false);
   const [savingMutedDeviceId, setSavingMutedDeviceId] = useState<string | null>(null);
+  const [savingTrustedDeviceId, setSavingTrustedDeviceId] = useState<string | null>(null);
+  const [sendingTestNotification, setSendingTestNotification] = useState(false);
+  const [alertTimingDraft, setAlertTimingDraft] = useState({
+    startupWarmupSec: 45,
+    globalCooldownSec: 20,
+    perDeviceCooldownSec: 60,
+  });
   const { toasts, showToast, dismissToast } = useToast();
   const knownIds = useRef(new Set<string>());
   const hydratedFromDb = useRef(false);
@@ -409,6 +423,10 @@ export default function App() {
   }, [devices, expandedDeviceId]);
 
   const offlineCount = devices.length - onlineCount;
+  const anomalyCount = useMemo(
+    () => devices.filter((device) => device.securityState === 'anomaly').length,
+    [devices]
+  );
   const lastSeen = devices[0]?.lastSeen;
   const hasAiKey = settings
     ? Object.values(settings.providers).some((provider) => provider.hasKey)
@@ -592,7 +610,13 @@ export default function App() {
     setSavingAccent(false);
   };
 
-  const handleUpdateAlerts = async (patch: { osNotifications?: boolean; unknownOnly?: boolean }) => {
+  const handleUpdateAlerts = async (patch: {
+    osNotifications?: boolean;
+    unknownOnly?: boolean;
+    startupWarmupMs?: number;
+    globalCooldownMs?: number;
+    perDeviceCooldownMs?: number;
+  }) => {
     if (!window.aneti?.settingsUpdateAlerts) {
       showToast('error', 'Alert settings unavailable.');
       return;
@@ -619,6 +643,57 @@ export default function App() {
     }
     setSavingMutedDeviceId(null);
   };
+
+  const handleSetDeviceTrusted = async (deviceId: string, trusted: boolean) => {
+    if (!window.aneti?.settingsSetDeviceTrusted) {
+      showToast('error', 'Trust settings unavailable.');
+      return;
+    }
+    setSavingTrustedDeviceId(deviceId);
+    const updated = await window.aneti.settingsSetDeviceTrusted(deviceId, trusted);
+    if (updated) {
+      setSettings(updated as SettingsPublic);
+      showToast('success', trusted ? 'Device marked trusted.' : 'Device marked untrusted.');
+    }
+    setSavingTrustedDeviceId(null);
+  };
+
+  const handleTestNotification = async () => {
+    if (!window.aneti?.settingsTestNotification) {
+      showToast('error', 'Test notification unavailable.');
+      return;
+    }
+    setSendingTestNotification(true);
+    const result = await window.aneti.settingsTestNotification();
+    const typed = result as { ok?: boolean; reason?: string } | null;
+    if (typed?.ok) {
+      showToast('success', 'Test notification sent.');
+    } else {
+      showToast(
+        'error',
+        typed?.reason === 'unsupported'
+          ? 'Notifications are not supported on this system.'
+          : 'Failed to send test notification.'
+      );
+    }
+    setSendingTestNotification(false);
+  };
+
+  const handleSaveAlertTiming = async () => {
+    const startupWarmupMs = Math.max(0, Math.min(300, Math.round(alertTimingDraft.startupWarmupSec))) * 1000;
+    const globalCooldownMs = Math.max(5, Math.min(300, Math.round(alertTimingDraft.globalCooldownSec))) * 1000;
+    const perDeviceCooldownMs = Math.max(5, Math.min(600, Math.round(alertTimingDraft.perDeviceCooldownSec))) * 1000;
+    await handleUpdateAlerts({ startupWarmupMs, globalCooldownMs, perDeviceCooldownMs });
+  };
+
+  useEffect(() => {
+    if (!settings?.alerts) return;
+    setAlertTimingDraft({
+      startupWarmupSec: Math.round((settings.alerts.startupWarmupMs ?? 45_000) / 1000),
+      globalCooldownSec: Math.round((settings.alerts.globalCooldownMs ?? 20_000) / 1000),
+      perDeviceCooldownSec: Math.round((settings.alerts.perDeviceCooldownMs ?? 60_000) / 1000),
+    });
+  }, [settings?.alerts]);
 
   return (
     <div className="min-h-screen bg-[#070b1a] text-white">
@@ -718,7 +793,11 @@ export default function App() {
             <section className="mt-8 grid grid-cols-1 gap-4 md:grid-cols-3">
               <StatCard label="Devices" value={`${devices.length}`} tone="info" />
               <StatCard label="Online" value={`${onlineCount}`} tone="good" />
-              <StatCard label="Offline" value={`${offlineCount}`} tone="warn" />
+              <StatCard
+                label={anomalyCount > 0 ? 'Anomalies' : 'Offline'}
+                value={anomalyCount > 0 ? `${anomalyCount}` : `${offlineCount}`}
+                tone={anomalyCount > 0 ? 'warn' : 'warn'}
+              />
             </section>
 
             <section className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-[1.2fr_1fr]">
@@ -804,6 +883,9 @@ export default function App() {
                               <div className={cn('device-tag', device.status === 'online' ? 'device-tag--ok' : 'device-tag--warn')}>
                                 {device.status}
                               </div>
+                              {device.securityState === 'anomaly' && (
+                                <div className="device-tag device-tag--security-anomaly">anomaly</div>
+                              )}
                               <div className="device-toggle">
                                 {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                               </div>
@@ -1009,6 +1091,21 @@ export default function App() {
                                 <button
                                   type="button"
                                   className="detail-copy-button"
+                                  disabled={savingTrustedDeviceId === device.id}
+                                  onClick={() =>
+                                    handleSetDeviceTrusted(
+                                      device.id,
+                                      !(settings?.security?.trustedDeviceIds ?? []).includes(device.id)
+                                    )
+                                  }
+                                >
+                                  {(settings?.security?.trustedDeviceIds ?? []).includes(device.id)
+                                    ? 'Mark untrusted'
+                                    : 'Mark trusted'}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="detail-copy-button"
                                   disabled={savingMutedDeviceId === device.id}
                                   onClick={() =>
                                     handleSetDeviceMuted(
@@ -1116,7 +1213,12 @@ export default function App() {
                     </div>
                   </div>
                   <p className="mt-3 text-sm text-white/60">
-                    Track expected devices and flag unknown entrants instantly.
+                    {anomalyCount > 0
+                      ? `${anomalyCount} untrusted device${anomalyCount === 1 ? '' : 's'} detected.`
+                      : 'No untrusted device anomalies right now.'}
+                  </p>
+                  <p className="mt-2 text-xs text-white/50">
+                    Trusted devices: {(settings?.security?.trustedDeviceIds ?? []).length}
                   </p>
                 </div>
               </div>
@@ -1326,6 +1428,84 @@ export default function App() {
                 </div>
                 <div className="scan-setting-note">
                   Muted devices: {(settings?.alerts?.mutedDeviceIds ?? []).length}
+                </div>
+                <div className="scan-setting-row">
+                  <div>
+                    <div className="scan-setting-label">Startup warmup</div>
+                    <div className="scan-setting-help">Suppress notifications during initial scan (seconds).</div>
+                  </div>
+                  <input
+                    type="number"
+                    min={0}
+                    max={300}
+                    step={5}
+                    className="detail-input scan-batch-input"
+                    value={alertTimingDraft.startupWarmupSec}
+                    onChange={(event) =>
+                      setAlertTimingDraft((prev) => ({
+                        ...prev,
+                        startupWarmupSec: Number(event.target.value) || 0,
+                      }))
+                    }
+                  />
+                </div>
+                <div className="scan-setting-row">
+                  <div>
+                    <div className="scan-setting-label">Global cooldown</div>
+                    <div className="scan-setting-help">Minimum seconds between notifications.</div>
+                  </div>
+                  <input
+                    type="number"
+                    min={5}
+                    max={300}
+                    step={5}
+                    className="detail-input scan-batch-input"
+                    value={alertTimingDraft.globalCooldownSec}
+                    onChange={(event) =>
+                      setAlertTimingDraft((prev) => ({
+                        ...prev,
+                        globalCooldownSec: Number(event.target.value) || 5,
+                      }))
+                    }
+                  />
+                </div>
+                <div className="scan-setting-row">
+                  <div>
+                    <div className="scan-setting-label">Per-device cooldown</div>
+                    <div className="scan-setting-help">Minimum seconds between alerts for the same device.</div>
+                  </div>
+                  <input
+                    type="number"
+                    min={5}
+                    max={600}
+                    step={5}
+                    className="detail-input scan-batch-input"
+                    value={alertTimingDraft.perDeviceCooldownSec}
+                    onChange={(event) =>
+                      setAlertTimingDraft((prev) => ({
+                        ...prev,
+                        perDeviceCooldownSec: Number(event.target.value) || 5,
+                      }))
+                    }
+                  />
+                </div>
+                <div className="detail-inline-actions">
+                  <button
+                    type="button"
+                    className="detail-action"
+                    disabled={sendingTestNotification || !(settings?.alerts?.osNotifications ?? true)}
+                    onClick={handleTestNotification}
+                  >
+                    {sendingTestNotification ? 'Sending…' : 'Test notification'}
+                  </button>
+                  <button
+                    type="button"
+                    className="detail-action detail-action--ghost"
+                    disabled={savingAlertPrefs}
+                    onClick={handleSaveAlertTiming}
+                  >
+                    Save timing
+                  </button>
                 </div>
               </div>
             </div>

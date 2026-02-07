@@ -22,7 +22,10 @@ let aiWorking = false;
 const aiSummaryCooldownMs = 60_000;
 const aiReappearThresholdMs = 20_000;
 const lastAlertAtById = new Map<string, number>();
-const osAlertCooldownMs = 60_000;
+const lastSecurityAlertAtById = new Map<string, number>();
+let lastGlobalAlertAt = 0;
+let alertWarmupUntil = 0;
+const securityAlertCooldownMs = 5 * 60_000;
 
 const processAiQueue = async () => {
   if (aiWorking || !ai) return;
@@ -140,15 +143,26 @@ const createMainWindow = () => {
   });
 
   scanner.onDevices((devices) => {
+    const alertPrefs = settings?.getAlerts();
+    const securityPrefs = settings?.getSecurity();
+    const trustedIds = new Set(securityPrefs?.trustedDeviceIds ?? []);
     const labeledDevices = (devices as Device[]).map((device) => {
       const label = labelById.get(device.id);
-      return label ? { ...device, label } : device;
+      return {
+        ...device,
+        label: label ?? device.label,
+        securityState: trustedIds.has(device.id) ? 'trusted' : null,
+      };
     });
 
     db?.syncDevices(labeledDevices as Device[]);
     mainWindow?.webContents.send('scanner:devices', labeledDevices);
 
     const now = Date.now();
+    const perDeviceCooldownMs = alertPrefs?.perDeviceCooldownMs ?? 60_000;
+    const globalCooldownMs = alertPrefs?.globalCooldownMs ?? 20_000;
+    const osAlertCandidates: Device[] = [];
+
     for (const device of labeledDevices as Device[]) {
       const prevStatus = lastStatusById.get(device.id);
       const prevSeen = lastSeenById.get(device.id);
@@ -163,30 +177,35 @@ const createMainWindow = () => {
         prevSeen !== undefined && (device.lastSeen ?? now) - prevSeen >= aiReappearThresholdMs;
       const lastSummaryAt = lastSummaryAtById.get(device.id) ?? 0;
       const lastAlertAt = lastAlertAtById.get(device.id) ?? 0;
-      const alertPrefs = settings?.getAlerts();
+      const lastSecurityAlertAt = lastSecurityAlertAtById.get(device.id) ?? 0;
       const isMuted = alertPrefs?.mutedDeviceIds.includes(device.id) ?? false;
+      const isDiscoveryEvent = isNew || cameOnline || reappeared;
+      const isInStartupWarmup = now < alertWarmupUntil;
+      const isTrusted = trustedIds.has(device.id);
+
+      if (isNew && !isTrusted) {
+        device.securityState = 'anomaly';
+        if (now - lastSecurityAlertAt >= securityAlertCooldownMs) {
+          lastSecurityAlertAtById.set(device.id, now);
+          db?.addAlert({
+            type: 'security_anomaly',
+            message: `Untrusted new device detected: ${device.label ?? device.hostname ?? device.ip} (${device.ip})`,
+            deviceId: device.id,
+            createdAt: now,
+          });
+        }
+      }
+
       const shouldNotify =
         Boolean(alertPrefs?.osNotifications) &&
         !isMuted &&
-        now - lastAlertAt >= osAlertCooldownMs &&
-        (alertPrefs?.unknownOnly ? isNew : (isNew || cameOnline || reappeared));
+        now - lastAlertAt >= perDeviceCooldownMs &&
+        !isInStartupWarmup &&
+        (alertPrefs?.unknownOnly ? isNew : isDiscoveryEvent);
 
-      if (shouldNotify && Notification.isSupported()) {
+      if (shouldNotify) {
         lastAlertAtById.set(device.id, now);
-        const displayName = device.label ?? device.hostname ?? device.mdnsName ?? device.ip;
-        const notification = new Notification({
-          title: 'AnetI alert',
-          body: `Device detected: ${displayName} (${device.ip})`,
-          silent: false,
-        });
-        notification.on('click', () => {
-          if (!mainWindow) return;
-          if (mainWindow.isMinimized()) {
-            mainWindow.restore();
-          }
-          mainWindow.focus();
-        });
-        notification.show();
+        osAlertCandidates.push(device);
       }
 
       if ((isNew || cameOnline || reappeared) && now - lastSummaryAt >= aiSummaryCooldownMs) {
@@ -194,6 +213,39 @@ const createMainWindow = () => {
         baselineDeviceIds.add(device.id);
         aiQueue.push(device);
       }
+    }
+
+    if (
+      osAlertCandidates.length > 0 &&
+      Notification.isSupported() &&
+      now - lastGlobalAlertAt >= globalCooldownMs
+    ) {
+      lastGlobalAlertAt = now;
+      const title =
+        osAlertCandidates.length > 1 ? 'AnetI alert summary' : 'AnetI alert';
+      const body =
+        osAlertCandidates.length > 1
+          ? `${osAlertCandidates.length} discovery events detected. Open AnetI for details.`
+          : `Device detected: ${
+              osAlertCandidates[0].label ??
+              osAlertCandidates[0].hostname ??
+              osAlertCandidates[0].mdnsName ??
+              osAlertCandidates[0].ip
+            } (${osAlertCandidates[0].ip})`;
+
+      const notification = new Notification({
+        title,
+        body,
+        silent: false,
+      });
+      notification.on('click', () => {
+        if (!mainWindow) return;
+        if (mainWindow.isMinimized()) {
+          mainWindow.restore();
+        }
+        mainWindow.focus();
+      });
+      notification.show();
     }
 
     void processAiQueue();
@@ -205,6 +257,7 @@ app.whenReady().then(() => {
   db = createDatabase(dbPath);
   settings = createSettingsStore(join(app.getPath('userData'), 'settings.json'));
   ai = createAiClient((provider) => settings?.getSecret(provider));
+  alertWarmupUntil = Date.now() + (settings?.getAlerts().startupWarmupMs ?? 45_000);
 
   ipcMain.on('preload:ready', (_event, payload) => {
     console.log('Preload ready:', payload);
@@ -241,12 +294,49 @@ app.whenReady().then(() => {
   );
   ipcMain.handle(
     'settings:alerts',
-    (_event, patch: { osNotifications?: boolean; unknownOnly?: boolean }) =>
-      settings?.updateAlerts(patch) ?? null
+    (
+      _event,
+      patch: {
+        osNotifications?: boolean;
+        unknownOnly?: boolean;
+        startupWarmupMs?: number;
+        globalCooldownMs?: number;
+        perDeviceCooldownMs?: number;
+      }
+    ) => {
+      const updated = settings?.updateAlerts(patch) ?? null;
+      if (updated) {
+        const warmup = updated.alerts.startupWarmupMs ?? 45_000;
+        alertWarmupUntil = Date.now() + warmup;
+      }
+      return updated;
+    }
   );
   ipcMain.handle('settings:mute-device', (_event, deviceId: string, muted: boolean) =>
     settings?.setDeviceMuted(deviceId, muted) ?? null
   );
+  ipcMain.handle('settings:trust-device', (_event, deviceId: string, trusted: boolean) =>
+    settings?.setDeviceTrusted(deviceId, trusted) ?? null
+  );
+  ipcMain.handle('settings:test-notification', () => {
+    if (!Notification.isSupported()) {
+      return { ok: false, reason: 'unsupported' };
+    }
+    const notification = new Notification({
+      title: 'AnetI test alert',
+      body: 'Notifications are working.',
+      silent: false,
+    });
+    notification.on('click', () => {
+      if (!mainWindow) return;
+      if (mainWindow.isMinimized()) {
+        mainWindow.restore();
+      }
+      mainWindow.focus();
+    });
+    notification.show();
+    return { ok: true };
+  });
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
