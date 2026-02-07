@@ -60,12 +60,31 @@ npm run build
 npm run preview
 ```
 
+### Headless Web Mode (Browser Access)
+
+Build and run the browser-accessible service:
+
+```bash
+npm run build:web
+npm run start:web
+```
+
+Then open:
+
+- `http://<host>:8787/dashboard`
+
+Environment overrides:
+
+- `ANETI_WEB_HOST` (default `0.0.0.0`)
+- `ANETI_WEB_PORT` (default `8787`)
+- `ANETI_DATA_DIR` (default `/var/lib/aneti`)
+
 ## Proxmox One-Line Install (Debian/Ubuntu VM/LXC)
 
 Run this inside your Proxmox guest:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/allisonhere/aNETi/main/scripts/proxmox-install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/allisonhere/aNETi/main/scripts/proxmox-install.sh | sudo bash -s -- --web-service
 ```
 
 What it does:
@@ -74,11 +93,12 @@ What it does:
 - installs Node.js 20 if missing
 - clones `allisonhere/aNETi` into `/opt/aneti`
 - runs `npm ci` and `npm run build`
+- enables `aneti-web.service` for browser access at port `8787`
 
 Custom install:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/allisonhere/aNETi/main/scripts/proxmox-install.sh | sudo bash -s -- --repo allisonhere/aNETi --branch main --dir /opt/aneti
+curl -fsSL https://raw.githubusercontent.com/allisonhere/aNETi/main/scripts/proxmox-install.sh | sudo bash -s -- --repo allisonhere/aNETi --branch main --dir /opt/aneti --web-service --web-port 8787
 ```
 
 ## Proxmox LXC One-Line Create + Install (Run On Proxmox Host)
@@ -103,6 +123,7 @@ Notes:
 - creates a privileged CT (`--unprivileged 0`) for simpler network-scanner behavior
 - after creation, runs `scripts/proxmox-install.sh` inside the CT
 - writes login details to `/root/aneti-lxc-<vmid>.txt` (override with `--password-file`)
+- installs browser mode by default (`aneti-web.service`)
 
 ## Settings Highlights
 

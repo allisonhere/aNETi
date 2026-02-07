@@ -10,6 +10,13 @@ Default port is `8787`.
 
 The server binds to localhost only.
 
+Headless web mode (`npm run start:web`) exposes browser/API endpoints on:
+
+- `http://<host>:<port>/dashboard`
+- `GET /api/health`
+- `GET /api/stats`
+- `GET /api/diagnostics`
+
 ## Authentication
 
 Every request must include a valid API token.

@@ -8,7 +8,9 @@
   "scripts": {
     "dev": "ELECTRON_ENTRY=out/main/index.js ELECTRON_RENDERER_URL=http://localhost:5173 ELECTRON_PRELOAD=src/preload/dev.cjs electron-vite dev",
     "build": "electron-vite build",
+    "build:web": "rm -rf out/web && tsc -p tsconfig.web.json",
     "preview": "electron-vite preview",
+    "start:web": "node out/web/web.js",
     "package:deb": "electron-builder --config electron-builder.yml --linux deb --publish never"
   },
   "dependencies": {

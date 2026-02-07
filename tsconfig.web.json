@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "outDir": "out/web",
+    "rootDir": "src/main",
+    "types": ["node"]
+  },
+  "include": [
+    "src/main/web.ts",
+    "src/main/scanner.ts",
+    "src/main/db.ts",
+    "src/main/settings.ts",
+    "src/main/types.ts"
+  ]
+}

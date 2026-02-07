@@ -6,7 +6,7 @@ usage() {
 AnetI Proxmox helper installer (Debian/Ubuntu guest)
 
 Usage:
-  proxmox-install.sh [--repo owner/name] [--branch name] [--dir path] [--skip-build]
+  proxmox-install.sh [--repo owner/name] [--branch name] [--dir path] [--skip-build] [--web-service]
 
 Examples:
   proxmox-install.sh
@@ -18,6 +18,10 @@ REPO="allisonhere/aNETi"
 BRANCH="main"
 INSTALL_DIR="/opt/aneti"
 SKIP_BUILD=0
+WEB_SERVICE=0
+WEB_HOST="0.0.0.0"
+WEB_PORT="8787"
+WEB_DATA_DIR="/var/lib/aneti"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -36,6 +40,22 @@ while [ $# -gt 0 ]; do
     --skip-build)
       SKIP_BUILD=1
       shift
+      ;;
+    --web-service)
+      WEB_SERVICE=1
+      shift
+      ;;
+    --web-host)
+      WEB_HOST="${2:-}"
+      shift 2
+      ;;
+    --web-port)
+      WEB_PORT="${2:-}"
+      shift 2
+      ;;
+    --web-data-dir)
+      WEB_DATA_DIR="${2:-}"
+      shift 2
       ;;
     --help|-h)
       usage
@@ -131,12 +151,65 @@ if [ "$SKIP_BUILD" -eq 0 ]; then
   npm --prefix "$INSTALL_DIR" run build
 fi
 
+if [ "$WEB_SERVICE" -eq 1 ]; then
+  echo "[aneti] Building web service runtime..."
+  npm --prefix "$INSTALL_DIR" run build:web
+
+  echo "[aneti] Installing systemd service: aneti-web.service"
+  cat >/etc/systemd/system/aneti-web.service <<EOF
+[Unit]
+Description=AnetI Headless Web Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=${INSTALL_DIR}
+Environment=ANETI_WEB_HOST=${WEB_HOST}
+Environment=ANETI_WEB_PORT=${WEB_PORT}
+Environment=ANETI_DATA_DIR=${WEB_DATA_DIR}
+ExecStart=/usr/bin/env npm run start:web
+Restart=always
+RestartSec=2
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  mkdir -p "$WEB_DATA_DIR"
+
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload
+    systemctl enable --now aneti-web.service
+  else
+    echo "[aneti] Warning: systemctl not found. Service file created but not started."
+  fi
+fi
+
+TOKEN=""
+SETTINGS_PATH="${WEB_DATA_DIR}/settings.json"
+if [ -f "$SETTINGS_PATH" ]; then
+  TOKEN="$(node -e "const fs=require('fs');const p=process.argv[1];const j=JSON.parse(fs.readFileSync(p,'utf8'));process.stdout.write(String(j?.integration?.apiToken||''));" "$SETTINGS_PATH" 2>/dev/null || true)"
+fi
+
 cat <<EOF
 
 [aneti] Done.
 - Source: $INSTALL_DIR
 - Start dev UI: cd $INSTALL_DIR && npm run dev
 - Build output: $INSTALL_DIR/out and $INSTALL_DIR/dist
-
-If this is a headless Proxmox guest, run the app with a desktop session or X/Wayland forwarding.
 EOF
+
+if [ "$WEB_SERVICE" -eq 1 ]; then
+  echo "- Web dashboard: http://<ct-ip>:${WEB_PORT}/dashboard"
+  if [ -n "$TOKEN" ]; then
+    echo "- API token: ${TOKEN}"
+  else
+    echo "- API token file: ${SETTINGS_PATH}"
+  fi
+  echo "- Service status: systemctl status aneti-web.service"
+else
+  echo "If this is a headless Proxmox guest, run the app with a desktop session or X/Wayland forwarding."
+fi
