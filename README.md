@@ -102,6 +102,7 @@ Notes:
 - auto-detects compatible template and CT storages unless `--storage` / `--template-storage` are set
 - creates a privileged CT (`--unprivileged 0`) for simpler network-scanner behavior
 - after creation, runs `scripts/proxmox-install.sh` inside the CT
+- writes login details to `/root/aneti-lxc-<vmid>.txt` (override with `--password-file`)
 
 ## Settings Highlights
 

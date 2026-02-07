@@ -20,6 +20,7 @@ Options:
   --memory-mb N             Memory MB (default: 2048)
   --cores N                 CPU cores (default: 2)
   --password PASS           Root password (default: auto-generated)
+  --password-file PATH      Write CT login details to this file
   --template NAME           Template filename (default: latest debian-12-standard)
   --repo OWNER/REPO         GitHub repo (default: allisonhere/aNETi)
   --branch NAME             Git branch (default: main)
@@ -89,6 +90,7 @@ DISK_GB="12"
 MEMORY_MB="2048"
 CORES="2"
 PASSWORD=""
+PASSWORD_FILE=""
 TEMPLATE=""
 REPO="allisonhere/aNETi"
 BRANCH="main"
@@ -106,6 +108,7 @@ while [ $# -gt 0 ]; do
     --memory-mb) MEMORY_MB="${2:-}"; shift 2 ;;
     --cores) CORES="${2:-}"; shift 2 ;;
     --password) PASSWORD="${2:-}"; shift 2 ;;
+    --password-file) PASSWORD_FILE="${2:-}"; shift 2 ;;
     --template) TEMPLATE="${2:-}"; shift 2 ;;
     --repo) REPO="${2:-}"; shift 2 ;;
     --branch) BRANCH="${2:-}"; shift 2 ;;
@@ -147,6 +150,10 @@ if [ -z "$PASSWORD" ]; then
   PASSWORD="$(random_password)"
 fi
 
+if [ -z "$PASSWORD_FILE" ]; then
+  PASSWORD_FILE="/root/aneti-lxc-${VMID}.txt"
+fi
+
 TEMPLATE_VOL="${TEMPLATE_STORAGE}:vztmpl/${TEMPLATE}"
 
 echo "[aneti] Ensuring template exists: ${TEMPLATE_VOL}"
@@ -170,7 +177,15 @@ pct create "$VMID" "$TEMPLATE_VOL" \
   --password "$PASSWORD"
 
 echo "[aneti] CT ${VMID} created."
-echo "[aneti] Root password: ${PASSWORD}"
+
+cat >"$PASSWORD_FILE" <<EOF
+AnetI Proxmox LXC Login
+CT_ID=${VMID}
+HOSTNAME=${HOSTNAME}
+USERNAME=root
+PASSWORD=${PASSWORD}
+EOF
+chmod 600 "$PASSWORD_FILE"
 
 if [ "$DO_START" -eq 0 ]; then
   echo "[aneti] Skipping start/install (--no-start)."
@@ -189,6 +204,8 @@ cat <<EOF
 [aneti] Complete.
 - CT ID: ${VMID}
 - Hostname: ${HOSTNAME}
+- Login: root / ${PASSWORD}
+- Login file: ${PASSWORD_FILE}
 - Enter CT: pct enter ${VMID}
 - App path: ${INSTALL_DIR}
 - Dev run: pct exec ${VMID} -- bash -lc 'cd ${INSTALL_DIR} && npm run dev'
