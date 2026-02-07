@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { ToastContainer, useToast } from './components/Toast';
 import { cn } from '@/lib/utils';
+import appIcon from './assets/app-icon.svg';
 
 export type Device = {
   id: string;
@@ -1087,7 +1088,17 @@ export default function App() {
           <div>
             <div className="flex items-center gap-3">
               <div className="rounded-2xl bg-white/10 p-3 shadow-[0_0_20px_rgba(37,99,235,0.4)]">
-                <Radar className="h-6 w-6 text-sky-300" />
+                <img
+                  src={appIcon}
+                  alt="AnetI app icon"
+                  className="h-6 w-6"
+                  onError={(event) => {
+                    event.currentTarget.style.display = 'none';
+                    const fallback = event.currentTarget.nextElementSibling as HTMLElement | null;
+                    if (fallback) fallback.style.display = 'block';
+                  }}
+                />
+                <Radar className="h-6 w-6 text-sky-300" style={{ display: 'none' }} />
               </div>
               <div>
                 <div className="text-xs uppercase tracking-[0.4em] text-sky-300/70">AnetI</div>

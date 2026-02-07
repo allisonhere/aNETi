@@ -28,7 +28,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: "npm"
 
       - name: Install deps
@@ -39,7 +39,7 @@ jobs:
 
       - name: Build deb installer
         if: contains(inputs.package_targets, 'deb')
-        run: npx electron-builder --config electron-builder.yml --linux deb --publish never
+        run: npm run package:deb
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
