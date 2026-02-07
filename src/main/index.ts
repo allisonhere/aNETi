@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { Notification, app, BrowserWindow, ipcMain, shell } from 'electron';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createScanner } from './scanner';
@@ -21,6 +21,8 @@ const aiQueue: Device[] = [];
 let aiWorking = false;
 const aiSummaryCooldownMs = 60_000;
 const aiReappearThresholdMs = 20_000;
+const lastAlertAtById = new Map<string, number>();
+const osAlertCooldownMs = 60_000;
 
 const processAiQueue = async () => {
   if (aiWorking || !ai) return;
@@ -160,6 +162,32 @@ const createMainWindow = () => {
       const reappeared =
         prevSeen !== undefined && (device.lastSeen ?? now) - prevSeen >= aiReappearThresholdMs;
       const lastSummaryAt = lastSummaryAtById.get(device.id) ?? 0;
+      const lastAlertAt = lastAlertAtById.get(device.id) ?? 0;
+      const alertPrefs = settings?.getAlerts();
+      const isMuted = alertPrefs?.mutedDeviceIds.includes(device.id) ?? false;
+      const shouldNotify =
+        Boolean(alertPrefs?.osNotifications) &&
+        !isMuted &&
+        now - lastAlertAt >= osAlertCooldownMs &&
+        (alertPrefs?.unknownOnly ? isNew : (isNew || cameOnline || reappeared));
+
+      if (shouldNotify && Notification.isSupported()) {
+        lastAlertAtById.set(device.id, now);
+        const displayName = device.label ?? device.hostname ?? device.mdnsName ?? device.ip;
+        const notification = new Notification({
+          title: 'AnetI alert',
+          body: `Device detected: ${displayName} (${device.ip})`,
+          silent: false,
+        });
+        notification.on('click', () => {
+          if (!mainWindow) return;
+          if (mainWindow.isMinimized()) {
+            mainWindow.restore();
+          }
+          mainWindow.focus();
+        });
+        notification.show();
+      }
 
       if ((isNew || cameOnline || reappeared) && now - lastSummaryAt >= aiSummaryCooldownMs) {
         lastSummaryAtById.set(device.id, now);
@@ -210,6 +238,14 @@ app.whenReady().then(() => {
   );
   ipcMain.handle('settings:accent', (_event, accentId: string | null) =>
     settings?.updateAccent(accentId) ?? null
+  );
+  ipcMain.handle(
+    'settings:alerts',
+    (_event, patch: { osNotifications?: boolean; unknownOnly?: boolean }) =>
+      settings?.updateAlerts(patch) ?? null
+  );
+  ipcMain.handle('settings:mute-device', (_event, deviceId: string, muted: boolean) =>
+    settings?.setDeviceMuted(deviceId, muted) ?? null
   );
 
   app.on('activate', () => {

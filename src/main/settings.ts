@@ -3,21 +3,46 @@ import { dirname } from 'node:path';
 
 export type ProviderId = 'openai' | 'gemini' | 'claude';
 
+export type AlertSettings = {
+  osNotifications: boolean;
+  unknownOnly: boolean;
+  mutedDeviceIds: string[];
+};
+
 type SettingsFile = {
   providers: Partial<Record<ProviderId, string>>;
   accentId?: string | null;
+  alerts?: AlertSettings;
   updatedAt: number;
 };
 
 export type SettingsPublic = {
   providers: Record<ProviderId, { hasKey: boolean; last4: string | null }>;
   accentId?: string | null;
+  alerts: AlertSettings;
   updatedAt: number;
 };
+
+const defaultAlerts = (): AlertSettings => ({
+  osNotifications: true,
+  unknownOnly: true,
+  mutedDeviceIds: [],
+});
+
+const normalizeAlerts = (alerts?: Partial<AlertSettings> | null): AlertSettings => ({
+  osNotifications: alerts?.osNotifications ?? true,
+  unknownOnly: alerts?.unknownOnly ?? true,
+  mutedDeviceIds: Array.isArray(alerts?.mutedDeviceIds)
+    ? alerts?.mutedDeviceIds
+        .map((id) => String(id).trim())
+        .filter(Boolean)
+    : [],
+});
 
 const defaultSettings = (): SettingsFile => ({
   providers: {},
   accentId: null,
+  alerts: defaultAlerts(),
   updatedAt: Date.now(),
 });
 
@@ -40,6 +65,7 @@ const scrubSettings = (settings: SettingsFile): SettingsPublic => {
       claude: toMeta(providers.claude),
     },
     accentId: settings.accentId ?? null,
+    alerts: normalizeAlerts(settings.alerts),
     updatedAt: settings.updatedAt,
   };
 };
@@ -59,6 +85,7 @@ export const createSettingsStore = (filePath: string) => {
       cache = {
         providers: parsed.providers ?? {},
         accentId: parsed.accentId ?? null,
+        alerts: normalizeAlerts(parsed.alerts),
         updatedAt: parsed.updatedAt ?? Date.now(),
       };
       return cache;
@@ -101,12 +128,53 @@ export const createSettingsStore = (filePath: string) => {
     return scrubSettings(settings);
   };
 
+  const updateAlerts = (patch: Partial<Pick<AlertSettings, 'osNotifications' | 'unknownOnly'>>) => {
+    const settings = load();
+    const current = normalizeAlerts(settings.alerts);
+    settings.alerts = {
+      ...current,
+      ...patch,
+      mutedDeviceIds: current.mutedDeviceIds,
+    };
+    settings.updatedAt = Date.now();
+    cache = settings;
+    persist(settings);
+    return scrubSettings(settings);
+  };
+
+  const setDeviceMuted = (deviceId: string, muted: boolean) => {
+    const id = deviceId.trim();
+    if (!id) return scrubSettings(load());
+
+    const settings = load();
+    const current = normalizeAlerts(settings.alerts);
+    const mutedIds = new Set(current.mutedDeviceIds);
+    if (muted) {
+      mutedIds.add(id);
+    } else {
+      mutedIds.delete(id);
+    }
+    settings.alerts = {
+      ...current,
+      mutedDeviceIds: Array.from(mutedIds),
+    };
+    settings.updatedAt = Date.now();
+    cache = settings;
+    persist(settings);
+    return scrubSettings(settings);
+  };
+
+  const getAlerts = () => normalizeAlerts(load().alerts);
+
   const getSecret = (provider: ProviderId) => load().providers[provider];
 
   return {
     getPublic,
     updateProvider,
     updateAccent,
+    updateAlerts,
+    setDeviceMuted,
+    getAlerts,
     getSecret,
   };
 };

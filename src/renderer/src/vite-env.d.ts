@@ -25,6 +25,8 @@ declare global {
       settingsGet: () => Promise<unknown>;
       settingsUpdate: (provider: 'openai' | 'gemini' | 'claude', key: string | null) => Promise<unknown>;
       settingsUpdateAccent: (accentId: string | null) => Promise<unknown>;
+      settingsUpdateAlerts: (patch: { osNotifications?: boolean; unknownOnly?: boolean }) => Promise<unknown>;
+      settingsSetDeviceMuted: (deviceId: string, muted: boolean) => Promise<unknown>;
       copyText: (value: string) => void;
     };
   }

@@ -10,7 +10,12 @@ contextBridge.exposeInMainWorld('anetiMeta', {
 ipcRenderer.send('preload:ready', { version: preloadVersion });
 
 contextBridge.exposeInMainWorld('aneti', {
-  startScan: (options?: { intervalMs?: number; maxHosts?: number }) => ipcRenderer.invoke('scanner:start', options),
+  startScan: (options?: {
+    intervalMs?: number;
+    maxHosts?: number;
+    progressive?: boolean;
+    batchSize?: number;
+  }) => ipcRenderer.invoke('scanner:start', options),
   stopScan: () => ipcRenderer.invoke('scanner:stop'),
   listDevices: () => ipcRenderer.invoke('scanner:list'),
   diagnostics: (options?: { maxHosts?: number }) => ipcRenderer.invoke('scanner:diagnostics', options),
@@ -33,5 +38,9 @@ contextBridge.exposeInMainWorld('aneti', {
   settingsUpdate: (provider: 'openai' | 'gemini' | 'claude', key: string | null) =>
     ipcRenderer.invoke('settings:update', provider, key),
   settingsUpdateAccent: (accentId: string | null) => ipcRenderer.invoke('settings:accent', accentId),
+  settingsUpdateAlerts: (patch: { osNotifications?: boolean; unknownOnly?: boolean }) =>
+    ipcRenderer.invoke('settings:alerts', patch),
+  settingsSetDeviceMuted: (deviceId: string, muted: boolean) =>
+    ipcRenderer.invoke('settings:mute-device', deviceId, muted),
   copyText: (value: string) => clipboard.writeText(String(value ?? '')),
 });

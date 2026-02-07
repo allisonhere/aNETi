@@ -42,6 +42,11 @@ type ProviderId = 'openai' | 'gemini' | 'claude';
 type SettingsPublic = {
   providers: Record<ProviderId, { hasKey: boolean; last4: string | null }>;
   accentId?: string | null;
+  alerts: {
+    osNotifications: boolean;
+    unknownOnly: boolean;
+    mutedDeviceIds: string[];
+  };
   updatedAt: number;
 };
 
@@ -189,6 +194,8 @@ export default function App() {
     claude: false,
   });
   const [savingProvider, setSavingProvider] = useState<ProviderId | null>(null);
+  const [savingAlertPrefs, setSavingAlertPrefs] = useState(false);
+  const [savingMutedDeviceId, setSavingMutedDeviceId] = useState<string | null>(null);
   const { toasts, showToast, dismissToast } = useToast();
   const knownIds = useRef(new Set<string>());
   const hydratedFromDb = useRef(false);
@@ -585,6 +592,34 @@ export default function App() {
     setSavingAccent(false);
   };
 
+  const handleUpdateAlerts = async (patch: { osNotifications?: boolean; unknownOnly?: boolean }) => {
+    if (!window.aneti?.settingsUpdateAlerts) {
+      showToast('error', 'Alert settings unavailable.');
+      return;
+    }
+    setSavingAlertPrefs(true);
+    const updated = await window.aneti.settingsUpdateAlerts(patch);
+    if (updated) {
+      setSettings(updated as SettingsPublic);
+      showToast('success', 'Alert settings updated.');
+    }
+    setSavingAlertPrefs(false);
+  };
+
+  const handleSetDeviceMuted = async (deviceId: string, muted: boolean) => {
+    if (!window.aneti?.settingsSetDeviceMuted) {
+      showToast('error', 'Mute settings unavailable.');
+      return;
+    }
+    setSavingMutedDeviceId(deviceId);
+    const updated = await window.aneti.settingsSetDeviceMuted(deviceId, muted);
+    if (updated) {
+      setSettings(updated as SettingsPublic);
+      showToast('success', muted ? 'Device muted from alerts.' : 'Device unmuted for alerts.');
+    }
+    setSavingMutedDeviceId(null);
+  };
+
   return (
     <div className="min-h-screen bg-[#070b1a] text-white">
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,#1d4ed8_0%,rgba(7,11,26,0.2)_45%)] opacity-70" />
@@ -974,6 +1009,21 @@ export default function App() {
                                 <button
                                   type="button"
                                   className="detail-copy-button"
+                                  disabled={savingMutedDeviceId === device.id}
+                                  onClick={() =>
+                                    handleSetDeviceMuted(
+                                      device.id,
+                                      !(settings?.alerts?.mutedDeviceIds ?? []).includes(device.id)
+                                    )
+                                  }
+                                >
+                                  {(settings?.alerts?.mutedDeviceIds ?? []).includes(device.id)
+                                    ? 'Unmute device alerts'
+                                    : 'Mute device alerts'}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="detail-copy-button"
                                   onClick={() => copyText(deviceSummary(device))}
                                 >
                                   Copy device summary
@@ -1048,8 +1098,13 @@ export default function App() {
                     </div>
                   </div>
                   <p className="mt-3 text-sm text-white/60">
-                    Configure OS, email, and Notifiarr alerts with per-device rules.
+                    {settings?.alerts?.osNotifications
+                      ? `OS notifications are enabled (${settings?.alerts?.unknownOnly ? 'unknown devices only' : 'all discovery events'}).`
+                      : 'OS notifications are disabled.'}
                   </p>
+                  <div className="mt-3 text-xs text-white/50">
+                    Muted devices: {(settings?.alerts?.mutedDeviceIds ?? []).length}
+                  </div>
                 </div>
 
                 <div className="rounded-3xl border border-white/10 bg-white/5 p-6">
@@ -1171,9 +1226,11 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => setScanProgressive((prev) => !prev)}
+                    aria-pressed={scanProgressive}
                     className={cn('toggle-button', scanProgressive && 'toggle-button--on')}
                   >
-                    {scanProgressive ? 'On' : 'Off'}
+                    <span className="toggle-knob" aria-hidden="true" />
+                    <span className="toggle-label">{scanProgressive ? 'Enabled' : 'Disabled'}</span>
                   </button>
                 </div>
 
@@ -1198,6 +1255,78 @@ export default function App() {
                   />
                 </div>
                 <div className="scan-setting-note">Changes apply on the next scan start/resume.</div>
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur">
+              <div className="flex items-center gap-3">
+                <div className="rounded-2xl bg-white/10 p-3">
+                  <Bell className="h-5 w-5 text-amber-300" />
+                </div>
+                <div>
+                  <div className="text-xs uppercase tracking-[0.3em] text-white/50">Alert Settings</div>
+                  <h2 className="mt-2 text-lg font-semibold">OS notifications</h2>
+                </div>
+              </div>
+              <p className="mt-3 text-sm text-white/60 max-w-xl">
+                Choose when desktop notifications fire for device discoveries.
+              </p>
+
+              <div className="scan-settings">
+                <div className="scan-setting-row">
+                  <div>
+                    <div className="scan-setting-label">Enable OS notifications</div>
+                    <div className="scan-setting-help">Show native desktop alerts when discovery events match your rules.</div>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={savingAlertPrefs}
+                    aria-pressed={settings?.alerts?.osNotifications ?? true}
+                    onClick={() =>
+                      handleUpdateAlerts({
+                        osNotifications: !(settings?.alerts?.osNotifications ?? true),
+                      })
+                    }
+                    className={cn(
+                      'toggle-button',
+                      (settings?.alerts?.osNotifications ?? true) && 'toggle-button--on'
+                    )}
+                  >
+                    <span className="toggle-knob" aria-hidden="true" />
+                    <span className="toggle-label">
+                      {(settings?.alerts?.osNotifications ?? true) ? 'Enabled' : 'Disabled'}
+                    </span>
+                  </button>
+                </div>
+
+                <div className="scan-setting-row">
+                  <div>
+                    <div className="scan-setting-label">Only unknown devices</div>
+                    <div className="scan-setting-help">When enabled, alerts trigger only on first-time devices.</div>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={savingAlertPrefs || !(settings?.alerts?.osNotifications ?? true)}
+                    aria-pressed={settings?.alerts?.unknownOnly ?? true}
+                    onClick={() =>
+                      handleUpdateAlerts({
+                        unknownOnly: !(settings?.alerts?.unknownOnly ?? true),
+                      })
+                    }
+                    className={cn(
+                      'toggle-button',
+                      (settings?.alerts?.unknownOnly ?? true) && 'toggle-button--on'
+                    )}
+                  >
+                    <span className="toggle-knob" aria-hidden="true" />
+                    <span className="toggle-label">
+                      {(settings?.alerts?.unknownOnly ?? true) ? 'Enabled' : 'Disabled'}
+                    </span>
+                  </button>
+                </div>
+                <div className="scan-setting-note">
+                  Muted devices: {(settings?.alerts?.mutedDeviceIds ?? []).length}
+                </div>
               </div>
             </div>
 
