@@ -1,0 +1,56 @@
+name: Build Release Installers
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build from (e.g. v0.1.1)"
+        required: true
+        type: string
+      package_targets:
+        description: "Installer targets (currently deb; arch planned)"
+        required: false
+        default: "deb"
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux-installers:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          ref: "refs/tags/${{ inputs.tag }}"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Build app bundles
+        run: npm run build
+
+      - name: Build deb installer
+        if: contains(inputs.package_targets, 'deb')
+        run: npx electron-builder --config electron-builder.yml --linux deb --publish never
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ inputs.tag }}
+          path: dist/installers/*.deb
+          if-no-files-found: error
+
+      - name: Attach deb to GitHub release
+        if: contains(inputs.package_targets, 'deb')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          files: dist/installers/*.deb

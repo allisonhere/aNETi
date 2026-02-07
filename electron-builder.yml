@@ -1,0 +1,16 @@
+appId: com.aneti.app
+productName: AnetI
+directories:
+  output: dist/installers
+files:
+  - out/**
+  - dist/renderer/**
+  - package.json
+  - LICENSE
+linux:
+  category: Network
+  target:
+    - target: deb
+      arch:
+        - x64
+artifactName: "${productName}-${version}-${os}-${arch}.${ext}"

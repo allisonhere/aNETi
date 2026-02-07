@@ -36,6 +36,7 @@ DRY_RUN=0
 AUTO_YES=0
 GITHUB_ONLY=0
 WITH_AUR=0
+WAIT_INSTALLERS=0
 
 # Runtime state
 STEP_START=0
@@ -219,6 +220,9 @@ preflight_release() {
   [ -f "$PROJECT_DIR/package.json" ] || {
     print_error "package.json not found in $PROJECT_DIR"
     return 1
+  }
+  [ -f "$PROJECT_DIR/.github/workflows/build-release-installers.yml" ] || {
+    print_warning "Installer workflow missing: .github/workflows/build-release-installers.yml"
   }
 
   require_cli git
@@ -453,6 +457,44 @@ publish_packages() {
     return 0
   fi
 
+  TAG="${TAG:-v$VERSION}"
+  if [ -z "$REMOTE_REPO" ]; then
+    resolve_remote_repo || true
+  fi
+
+  if [ -n "$REMOTE_REPO" ]; then
+    print_substep "Triggering installer workflow (deb) for $TAG..."
+    if [ "$DRY_RUN" -eq 1 ]; then
+      print_info "[dry-run] gh workflow run build-release-installers.yml --repo '$REMOTE_REPO' -f tag='$TAG' -f package_targets='deb'"
+    else
+      gh workflow run build-release-installers.yml \
+        --repo "$REMOTE_REPO" \
+        -f tag="$TAG" \
+        -f package_targets="deb"
+
+      local run_id
+      run_id=$(gh run list \
+        --repo "$REMOTE_REPO" \
+        --workflow build-release-installers.yml \
+        --limit 1 \
+        --json databaseId \
+        --jq '.[0].databaseId' 2>/dev/null || true)
+
+      if [ -n "$run_id" ]; then
+        print_info "Workflow run queued: $run_id"
+        print_info "View run: https://github.com/$REMOTE_REPO/actions/runs/$run_id"
+        if [ "$WAIT_INSTALLERS" -eq 1 ]; then
+          print_substep "Waiting for installer workflow completion..."
+          gh run watch "$run_id" --repo "$REMOTE_REPO"
+        fi
+      else
+        print_warning "Workflow triggered, but run id could not be resolved immediately."
+      fi
+    fi
+  else
+    print_warning "REMOTE_REPO not resolved; skipping installer workflow trigger."
+  fi
+
   if [ "$WITH_AUR" -eq 1 ]; then
     print_warning "AUR publish is a phase-2 hook and is not implemented yet."
     print_info "Planned target dir: $PACKAGE_REPO_DIR"
@@ -576,6 +618,9 @@ parse_args() {
     --with-aur)
       WITH_AUR=1
       ;;
+    --wait-installers)
+      WAIT_INSTALLERS=1
+      ;;
     --repo)
       shift
       REMOTE_REPO="${1:-}"
@@ -591,6 +636,8 @@ Options:
                    Override GitHub repo target
   --github-only    Skip external package publish phase
   --with-aur       Enable AUR publish hook (phase-2 placeholder)
+  --wait-installers
+                   Wait for installer workflow completion after triggering
   --help           Show this help
 EOF
       exit 0
