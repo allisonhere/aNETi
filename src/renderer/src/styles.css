@@ -76,6 +76,8 @@ button {
 .text-emerald-200 { color: #a7f3d0; }
 .text-emerald-300 { color: #6ee7b7; }
 .text-red-400 { color: #f87171; }
+.opacity-70 { opacity: 0.7; }
+.transition { transition: all 150ms ease; }
 .shadow-\[0_0_20px_rgba\(37,99,235,0\.4\)\] { box-shadow: 0 0 20px rgba(37,99,235,0.4); }
 .shadow-\[0_0_24px_rgba\(56,189,248,0\.2\)\] { box-shadow: 0 0 24px rgba(56,189,248,0.2); }
 .shadow-\[0_0_24px_rgba\(248,113,113,0\.18\)\] { box-shadow: 0 0 24px rgba(248,113,113,0.18); }
@@ -107,6 +109,160 @@ button {
 .space-y-6 > :not([hidden]) ~ :not([hidden]) { margin-top: 1.5rem; }
 .grid { display: grid; }
 .grid-cols-1 { grid-template-columns: repeat(1, minmax(0, 1fr)); }
+.device-card {
+  position: relative;
+  overflow: hidden;
+}
+.device-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity 180ms ease;
+  background: radial-gradient(circle at 20% 20%, rgba(56, 189, 248, 0.18), transparent 60%);
+  pointer-events: none;
+}
+.device-card--online::after {
+  opacity: 0.55;
+}
+.device-card--offline::after {
+  background: radial-gradient(circle at 20% 20%, rgba(248, 113, 113, 0.18), transparent 60%);
+  opacity: 0.4;
+}
+.device-accent {
+  width: 0.4rem;
+  height: 2.4rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 0 10px rgba(255, 255, 255, 0.08);
+}
+.device-accent--online {
+  background: linear-gradient(180deg, rgba(56, 189, 248, 0.95), rgba(16, 185, 129, 0.75));
+  box-shadow: 0 0 14px rgba(56, 189, 248, 0.4);
+}
+.device-accent--offline {
+  background: linear-gradient(180deg, rgba(248, 113, 113, 0.9), rgba(244, 63, 94, 0.5));
+  box-shadow: 0 0 12px rgba(248, 113, 113, 0.35);
+}
+.device-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.15rem 0.45rem;
+  border-radius: 0.5rem;
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  color: rgba(226, 232, 240, 0.75);
+  font-size: 0.7rem;
+  margin-right: 0.35rem;
+}
+.device-tag--latency {
+  justify-content: center;
+  min-width: 3.2rem;
+}
+.device-tag--ok {
+  border-color: rgba(52, 211, 153, 0.4);
+  color: #6ee7b7;
+  background: rgba(16, 185, 129, 0.12);
+}
+.device-tag--warn {
+  border-color: rgba(248, 113, 113, 0.4);
+  color: #fda4af;
+  background: rgba(248, 113, 113, 0.12);
+}
+.skeleton-card {
+  position: relative;
+  overflow: hidden;
+}
+.skeleton-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.12), transparent);
+  animation: shimmer 1.4s infinite;
+  pointer-events: none;
+}
+.skeleton-accent {
+  width: 0.4rem;
+  height: 2.4rem;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.25);
+}
+.skeleton-line {
+  height: 0.65rem;
+  border-radius: 0.4rem;
+  background: rgba(148, 163, 184, 0.2);
+}
+.skeleton-line--lg {
+  width: 12rem;
+}
+.skeleton-line--sm {
+  width: 9rem;
+}
+.skeleton-line--xs {
+  width: 3.2rem;
+}
+@keyframes shimmer {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(120%); }
+}
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.15rem 0.6rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  color: rgba(226, 232, 240, 0.8);
+  background: rgba(15, 23, 42, 0.6);
+}
+.status-pill--ok {
+  border-color: rgba(52, 211, 153, 0.4);
+  color: #6ee7b7;
+  background: rgba(16, 185, 129, 0.15);
+}
+.status-pill--empty {
+  border-color: rgba(248, 113, 113, 0.4);
+  color: #fda4af;
+  background: rgba(248, 113, 113, 0.15);
+}
+.input-field {
+  width: 100%;
+  border-radius: 0.9rem;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: rgba(15, 23, 42, 0.6);
+  color: #f8fafc;
+  padding: 0.7rem 0.9rem;
+  font-size: 0.9rem;
+  outline: none;
+}
+.input-field:focus {
+  border-color: rgba(56, 189, 248, 0.6);
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.15);
+}
+.primary-button,
+.ghost-button {
+  border-radius: 9999px;
+  padding: 0.45rem 0.9rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  transition: all 150ms ease;
+}
+.primary-button {
+  background: rgba(56, 189, 248, 0.2);
+  color: #bae6fd;
+  border: 1px solid rgba(56, 189, 248, 0.4);
+}
+.primary-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.ghost-button {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
 @media (min-width: 768px) {
   .md\:grid-cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }

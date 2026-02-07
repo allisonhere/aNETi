@@ -6,7 +6,7 @@
   "type": "module",
   "main": "out/main/index.js",
   "scripts": {
-    "dev": "ELECTRON_ENTRY=out/main/index.js ELECTRON_RENDERER_URL=http://localhost:5173 electron-vite dev",
+    "dev": "ELECTRON_ENTRY=out/main/index.js ELECTRON_RENDERER_URL=http://localhost:5173 ELECTRON_PRELOAD=src/preload/dev.cjs electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview"
   },
