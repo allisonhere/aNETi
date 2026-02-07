@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
+  BellOff,
   Bell,
+  CircleCheck,
   ChevronDown,
   ChevronUp,
   KeyRound,
@@ -9,8 +11,10 @@ import {
   Radar,
   Router,
   Settings,
+  ShieldAlert,
   ShieldCheck,
   Sparkles,
+  Zap,
 } from 'lucide-react';
 import { ToastContainer, useToast } from './components/Toast';
 import { cn } from '@/lib/utils';
@@ -82,6 +86,15 @@ type SightingRecord = {
   status?: 'online' | 'offline' | null;
 };
 
+type PulseSample = {
+  at: number;
+  online: number;
+  anomalies: number;
+  newDevices5m: number;
+  rejoins5m: number;
+  trusted: number;
+};
+
 const formatTimestamp = (value: number) =>
   new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
@@ -109,6 +122,150 @@ function StatCard({ label, value, tone }: { label: string; value: string; tone?:
       <div className="text-xs uppercase tracking-[0.2em] text-white/50">{label}</div>
       <div className="mt-2 text-2xl font-semibold text-white">{value}</div>
     </div>
+  );
+}
+
+function NetworkPulseHero({
+  samples,
+  onlineCount,
+  trustedCount,
+  anomalyCount,
+  newDevices5m,
+  rejoins5m,
+}: {
+  samples: PulseSample[];
+  onlineCount: number;
+  trustedCount: number;
+  anomalyCount: number;
+  newDevices5m: number;
+  rejoins5m: number;
+}) {
+  const width = 760;
+  const height = 170;
+  const padX = 12;
+  const padY = 16;
+  const chartW = width - padX * 2;
+  const chartH = height - padY * 2;
+
+  const normalize = (value: number, max: number) => {
+    if (max <= 0) return chartH + padY;
+    const ratio = Math.min(Math.max(value / max, 0), 1);
+    return padY + chartH - ratio * chartH;
+  };
+
+  const buildLinePath = (values: number[], max: number) => {
+    if (values.length === 0) return '';
+    if (values.length === 1) {
+      return `M ${padX} ${normalize(values[0], max)} L ${padX + chartW} ${normalize(values[0], max)}`;
+    }
+    const step = chartW / (values.length - 1);
+    return values
+      .map((value, index) => `${index === 0 ? 'M' : 'L'} ${padX + step * index} ${normalize(value, max)}`)
+      .join(' ');
+  };
+
+  const buildAreaPath = (values: number[], max: number) => {
+    if (values.length === 0) return '';
+    if (values.length === 1) {
+      const y = normalize(values[0], max);
+      return `M ${padX} ${height - padY} L ${padX} ${y} L ${padX + chartW} ${y} L ${padX + chartW} ${height - padY} Z`;
+    }
+    const step = chartW / (values.length - 1);
+    const line = values
+      .map((value, index) => `${index === 0 ? 'M' : 'L'} ${padX + step * index} ${normalize(value, max)}`)
+      .join(' ');
+    return `${line} L ${padX + chartW} ${height - padY} L ${padX} ${height - padY} Z`;
+  };
+
+  const onlineSeries = samples.map((sample) => sample.online);
+  const anomalySeries = samples.map((sample) => sample.anomalies);
+  const newSeries = samples.map((sample) => sample.newDevices5m);
+  const rejoinSeries = samples.map((sample) => sample.rejoins5m);
+  const maxOnline = Math.max(2, ...onlineSeries);
+  const maxAnomaly = Math.max(1, ...anomalySeries);
+  const maxNew = Math.max(1, ...newSeries);
+  const maxRejoin = Math.max(1, ...rejoinSeries);
+
+  const onlinePath = buildLinePath(onlineSeries, maxOnline);
+  const onlineAreaPath = buildAreaPath(onlineSeries, maxOnline);
+  const anomalyPath = buildLinePath(anomalySeries, maxAnomaly);
+  const newPath = buildLinePath(newSeries, maxNew);
+  const rejoinPath = buildLinePath(rejoinSeries, maxRejoin);
+
+  const anomalyMiniWidth = 200;
+  const anomalyMiniHeight = 46;
+  const miniPad = 5;
+  const miniValues = anomalySeries.slice(-32);
+  const miniMax = Math.max(1, ...miniValues);
+  const miniStep = miniValues.length > 1 ? (anomalyMiniWidth - miniPad * 2) / (miniValues.length - 1) : 0;
+  const miniPath =
+    miniValues.length === 0
+      ? ''
+      : miniValues
+          .map((value, index) => {
+            const x = miniPad + miniStep * index;
+            const y = anomalyMiniHeight - miniPad - (value / miniMax) * (anomalyMiniHeight - miniPad * 2);
+            return `${index === 0 ? 'M' : 'L'} ${x} ${y}`;
+          })
+          .join(' ');
+
+  return (
+    <section className="mt-8 pulse-hero">
+      <div className="pulse-head">
+        <div>
+          <div className="pulse-kicker">Network Pulse</div>
+          <h2 className="pulse-title">Realtime discovery signal</h2>
+        </div>
+        <div className="pulse-chips">
+          <span className="pulse-chip pulse-chip--accent">
+            <Activity className="pulse-chip-icon" />
+            Online {onlineCount}
+          </span>
+          <span className="pulse-chip pulse-chip--green">
+            <CircleCheck className="pulse-chip-icon" />
+            Trusted {trustedCount}
+          </span>
+          <span className="pulse-chip pulse-chip--red">
+            <ShieldAlert className="pulse-chip-icon" />
+            Anomalies {anomalyCount}
+          </span>
+          <span className="pulse-chip pulse-chip--cyan">
+            <Zap className="pulse-chip-icon" />
+            New / 5m {newDevices5m}
+          </span>
+          <span className="pulse-chip pulse-chip--amber">
+            <Activity className="pulse-chip-icon" />
+            Rejoins / 5m {rejoins5m}
+          </span>
+        </div>
+      </div>
+
+      <div className="pulse-grid">
+        <div className="pulse-ribbon">
+          <div className="pulse-sweep" />
+          <svg viewBox={`0 0 ${width} ${height}`} className="pulse-svg" preserveAspectRatio="none">
+            <defs>
+              <linearGradient id="pulse-fill" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="rgba(var(--accent-400-rgb), 0.35)" />
+                <stop offset="100%" stopColor="rgba(var(--accent-400-rgb), 0.02)" />
+              </linearGradient>
+            </defs>
+            <path d={onlineAreaPath} fill="url(#pulse-fill)" />
+            <path d={onlinePath} className="pulse-line" />
+            <path d={newPath} className="pulse-line pulse-line--cyan" />
+            <path d={rejoinPath} className="pulse-line pulse-line--amber" />
+            <path d={anomalyPath} className="pulse-line pulse-line--anomaly" />
+          </svg>
+        </div>
+
+        <div className="pulse-mini">
+          <div className="pulse-mini-label">Anomaly Sparkline</div>
+          <svg viewBox={`0 0 ${anomalyMiniWidth} ${anomalyMiniHeight}`} className="pulse-mini-svg">
+            <path d={miniPath} className="pulse-mini-line" />
+          </svg>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -210,11 +367,16 @@ export default function App() {
     globalCooldownSec: 20,
     perDeviceCooldownSec: 60,
   });
+  const [pulseSamples, setPulseSamples] = useState<PulseSample[]>([]);
+  const [discoveryEvents, setDiscoveryEvents] = useState<number[]>([]);
+  const [rejoinEvents, setRejoinEvents] = useState<number[]>([]);
   const { toasts, showToast, dismissToast } = useToast();
   const knownIds = useRef(new Set<string>());
   const hydratedFromDb = useRef(false);
   const hasScanResult = useRef(false);
   const initialScanHandled = useRef(false);
+  const lastPulseSampleAt = useRef(0);
+  const statusById = useRef(new Map<string, Device['status']>());
 
   useEffect(() => {
     let unsubscribe: (() => void) | undefined;
@@ -276,6 +438,21 @@ export default function App() {
       unsubscribe = window.aneti.onDevices((next) => {
         const list = next as Device[];
         setDevices(list);
+        const stamp = Date.now();
+        let rejoins = 0;
+        for (const device of list) {
+          const prevStatus = statusById.current.get(device.id);
+          if (prevStatus && prevStatus !== 'online' && device.status === 'online') {
+            rejoins += 1;
+          }
+          statusById.current.set(device.id, device.status);
+        }
+        if (rejoins > 0) {
+          setRejoinEvents((prev) => [
+            ...prev.filter((item) => stamp - item <= 300_000),
+            ...Array.from({ length: rejoins }, () => stamp),
+          ]);
+        }
         if (!hasScanResult.current) {
           hasScanResult.current = true;
           setScanStatus('ready');
@@ -287,6 +464,12 @@ export default function App() {
           const newCount = list.filter((device) => !known.has(device.id)).length;
           for (const device of list) {
             known.add(device.id);
+          }
+          if (newCount > 0) {
+            setDiscoveryEvents((prev) => [
+              ...prev.filter((item) => stamp - item <= 300_000),
+              ...Array.from({ length: newCount }, () => stamp),
+            ]);
           }
           initialScanHandled.current = true;
           if (list.length > 0) {
@@ -301,6 +484,10 @@ export default function App() {
 
         const newDevices = list.filter((device) => !known.has(device.id));
         if (newDevices.length === 0) return;
+        setDiscoveryEvents((prev) => [
+          ...prev.filter((item) => stamp - item <= 300_000),
+          ...Array.from({ length: newDevices.length }, () => stamp),
+        ]);
 
         if (newDevices.length > 1) {
           showToast('info', `Scan update: ${list.length} devices (${newDevices.length} new).`);
@@ -398,6 +585,10 @@ export default function App() {
     () => devices.filter((device) => device.status === 'online').length,
     [devices]
   );
+  const trustedCount = useMemo(() => {
+    const trusted = new Set(settings?.security?.trustedDeviceIds ?? []);
+    return devices.filter((device) => trusted.has(device.id)).length;
+  }, [devices, settings?.security?.trustedDeviceIds]);
 
   useEffect(() => {
     setRenderDevices((prev) => {
@@ -427,6 +618,14 @@ export default function App() {
     () => devices.filter((device) => device.securityState === 'anomaly').length,
     [devices]
   );
+  const newDevices5m = useMemo(() => {
+    const now = Date.now();
+    return discoveryEvents.filter((item) => now - item <= 300_000).length;
+  }, [discoveryEvents]);
+  const rejoins5m = useMemo(() => {
+    const now = Date.now();
+    return rejoinEvents.filter((item) => now - item <= 300_000).length;
+  }, [rejoinEvents]);
   const lastSeen = devices[0]?.lastSeen;
   const hasAiKey = settings
     ? Object.values(settings.providers).some((provider) => provider.hasKey)
@@ -695,6 +894,26 @@ export default function App() {
     });
   }, [settings?.alerts]);
 
+  useEffect(() => {
+    const now = Date.now();
+    if (now - lastPulseSampleAt.current < 1200 && pulseSamples.length > 0) return;
+    lastPulseSampleAt.current = now;
+    setPulseSamples((prev) => {
+      const next = [
+        ...prev,
+        {
+          at: now,
+          online: onlineCount,
+          anomalies: anomalyCount,
+          newDevices5m,
+          rejoins5m,
+          trusted: trustedCount,
+        },
+      ];
+      return next.slice(-72);
+    });
+  }, [onlineCount, anomalyCount, newDevices5m, rejoins5m, trustedCount, pulseSamples.length]);
+
   return (
     <div className="min-h-screen bg-[#070b1a] text-white">
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,#1d4ed8_0%,rgba(7,11,26,0.2)_45%)] opacity-70" />
@@ -790,6 +1009,14 @@ export default function App() {
 
         {view === 'dashboard' && (
           <>
+            <NetworkPulseHero
+              samples={pulseSamples}
+              onlineCount={onlineCount}
+              trustedCount={trustedCount}
+              anomalyCount={anomalyCount}
+              newDevices5m={newDevices5m}
+              rejoins5m={rejoins5m}
+            />
             <section className="mt-8 grid grid-cols-1 gap-4 md:grid-cols-3">
               <StatCard label="Devices" value={`${devices.length}`} tone="info" />
               <StatCard label="Online" value={`${onlineCount}`} tone="good" />
@@ -841,6 +1068,8 @@ export default function App() {
                   {scanStatus !== 'scanning' &&
                     renderDevices.map((device) => {
                       const isExpanded = expandedDeviceId === device.id;
+                      const isMuted = (settings?.alerts?.mutedDeviceIds ?? []).includes(device.id);
+                      const isTrusted = (settings?.security?.trustedDeviceIds ?? []).includes(device.id);
                       return (
                         <div key={device.id} className="device-stack">
                           <div
@@ -883,6 +1112,18 @@ export default function App() {
                               <div className={cn('device-tag', device.status === 'online' ? 'device-tag--ok' : 'device-tag--warn')}>
                                 {device.status}
                               </div>
+                              {isTrusted && (
+                                <div className="device-tag device-tag--trusted">
+                                  <CircleCheck className="device-tag__icon" />
+                                  trusted
+                                </div>
+                              )}
+                              {isMuted && (
+                                <div className="device-tag device-tag--muted">
+                                  <BellOff className="device-tag__icon" />
+                                  muted
+                                </div>
+                              )}
                               {device.securityState === 'anomaly' && (
                                 <div className="device-tag device-tag--security-anomaly">anomaly</div>
                               )}
@@ -981,6 +1222,32 @@ export default function App() {
                                 >
                                   {formatDateTime(device.lastSeen)}
                                 </button>
+                              </div>
+                              <div className="detail-row">
+                                <div className="detail-label">Security</div>
+                                <div className="detail-value">
+                                  {isTrusted ? (
+                                    <span className="device-tag device-tag--trusted">
+                                      <CircleCheck className="device-tag__icon" />
+                                      trusted
+                                    </span>
+                                  ) : (
+                                    <span className="device-tag device-tag--security-anomaly">untrusted</span>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="detail-row">
+                                <div className="detail-label">Alerts</div>
+                                <div className="detail-value">
+                                  {isMuted ? (
+                                    <span className="device-tag device-tag--muted">
+                                      <BellOff className="device-tag__icon" />
+                                      muted
+                                    </span>
+                                  ) : (
+                                    <span className="device-tag device-tag--ok">active</span>
+                                  )}
+                                </div>
                               </div>
                               <div className="detail-history">
                                 <div className="detail-history-header">
