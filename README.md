@@ -92,13 +92,14 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/allisonhere/aNETi/main/s
 Common custom example:
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/allisonhere/aNETi/main/scripts/proxmox-lxc-create.sh)" -- --vmid 120 --hostname aneti --storage local-lvm --bridge vmbr0
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/allisonhere/aNETi/main/scripts/proxmox-lxc-create.sh)" -- --vmid 120 --hostname aneti --bridge vmbr0
 ```
 
 Notes:
 
 - run as `root` on Proxmox host
 - defaults to latest `debian-12-standard` template via `pveam`
+- auto-detects compatible template and CT storages unless `--storage` / `--template-storage` are set
 - creates a privileged CT (`--unprivileged 0`) for simpler network-scanner behavior
 - after creation, runs `scripts/proxmox-install.sh` inside the CT
 

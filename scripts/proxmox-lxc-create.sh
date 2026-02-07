@@ -40,6 +40,22 @@ require_cmd() {
   }
 }
 
+storage_exists() {
+  local name="$1"
+  pvesm status 2>/dev/null | awk 'NR>1 {print $1}' | grep -qx "$name"
+}
+
+pick_storage_by_content() {
+  local content="$1"
+  local selected
+  selected="$(pvesm status -content "$content" 2>/dev/null | awk 'NR>1 {print $1; exit}')"
+  if [ -z "$selected" ]; then
+    echo "Could not find any storage with content '${content}'." >&2
+    exit 1
+  fi
+  printf '%s\n' "$selected"
+}
+
 pick_debian12_template() {
   local selected
   selected=$(pveam available | awk '/debian-12-standard/ { tpl=$2 } END { print tpl }')
@@ -66,8 +82,8 @@ require_cmd pvesm
 
 VMID=""
 HOSTNAME="aneti"
-STORAGE="local-lvm"
-TEMPLATE_STORAGE="local"
+STORAGE="auto"
+TEMPLATE_STORAGE="auto"
 BRIDGE="vmbr0"
 DISK_GB="12"
 MEMORY_MB="2048"
@@ -103,6 +119,24 @@ done
 
 if [ -z "$VMID" ]; then
   VMID="$(pvesh get /cluster/nextid)"
+fi
+
+if [ "$TEMPLATE_STORAGE" = "auto" ]; then
+  TEMPLATE_STORAGE="$(pick_storage_by_content vztmpl)"
+elif ! storage_exists "$TEMPLATE_STORAGE"; then
+  echo "Template storage '${TEMPLATE_STORAGE}' does not exist on this node." >&2
+  echo "Available storages:" >&2
+  pvesm status >&2 || true
+  exit 1
+fi
+
+if [ "$STORAGE" = "auto" ]; then
+  STORAGE="$(pick_storage_by_content rootdir)"
+elif ! storage_exists "$STORAGE"; then
+  echo "CT storage '${STORAGE}' does not exist on this node." >&2
+  echo "Available storages:" >&2
+  pvesm status >&2 || true
+  exit 1
 fi
 
 if [ -z "$TEMPLATE" ]; then
