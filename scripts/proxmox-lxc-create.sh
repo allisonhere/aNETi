@@ -75,6 +75,21 @@ random_password() {
   tr -dc 'A-Za-z0-9_@%+=' </dev/urandom | head -c 24 || true
 }
 
+get_ct_ip() {
+  local vmid="$1"
+  local ip=""
+  for _ in $(seq 1 12); do
+    ip="$(pct exec "$vmid" -- bash -lc "hostname -I 2>/dev/null | awk '{print \$1}'" 2>/dev/null || true)"
+    ip="${ip%% *}"
+    if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      printf '%s\n' "$ip"
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+
 if [ "$(id -u)" -ne 0 ]; then
   echo "Run as root on Proxmox host." >&2
   exit 1
@@ -215,11 +230,17 @@ if [ "$WEB_SERVICE" -eq 1 ]; then
 fi
 pct exec "$VMID" -- bash -lc "apt-get update -y && apt-get install -y curl ca-certificates && curl -fsSL https://raw.githubusercontent.com/${REPO}/${BRANCH}/scripts/proxmox-install.sh | bash -s -- ${INSTALL_ARGS}"
 
+CT_IP="unknown"
+if ip="$(get_ct_ip "$VMID")"; then
+  CT_IP="$ip"
+fi
+
 cat <<EOF
 
 [aneti] Complete.
 - CT ID: ${VMID}
 - Hostname: ${HOSTNAME}
+- CT IP: ${CT_IP}
 - Login: root / ${PASSWORD}
 - Login file: ${PASSWORD_FILE}
 - Enter CT: pct enter ${VMID}
@@ -228,7 +249,11 @@ cat <<EOF
 EOF
 
 if [ "$WEB_SERVICE" -eq 1 ]; then
-  echo "- Browser app: http://<ct-ip>:${WEB_PORT}/app"
+  if [ "$CT_IP" = "unknown" ]; then
+    echo "- Browser app: http://<ct-ip>:${WEB_PORT}/app"
+  else
+    echo "- Browser app: http://${CT_IP}:${WEB_PORT}/app"
+  fi
   if [ "$WEB_DISABLE_AUTH" -eq 1 ]; then
     echo "- Auth: disabled"
   fi
