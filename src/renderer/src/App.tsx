@@ -124,6 +124,15 @@ const formatDateTime = (value: number) =>
 const scanMaxHosts = 1024;
 const scanIntervalMs = 8000;
 
+const formatAgo = (ts: number) => {
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 5) return 'now';
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  return `${Math.floor(m / 60)}h`;
+};
+
 function StatCard({ label, value, tone }: { label: string; value: string; tone?: 'good' | 'warn' | 'info' }) {
   return (
     <div
@@ -235,24 +244,65 @@ function NetworkPulseHero({
   const rejoinPath = buildLinePath(rejoinSeries, maxRejoin);
   const latencyPath = buildLinePath(latencySeries, maxLatency);
 
-  const portMap = useMemo(() => {
-    const map = new Map<number, number>();
-    for (const device of devices) {
-      if (!device.openPorts) continue;
-      for (const port of device.openPorts) {
-        map.set(port, (map.get(port) ?? 0) + 1);
+  /* ── Activity feed ── */
+  type ActivityEvent = { id: number; ts: number; kind: 'joined' | 'left' | 'returned' | 'ports' | 'anomaly'; label: string; detail?: string };
+  const activitySeq = useRef(0);
+  const [activityEvents, setActivityEvents] = useState<ActivityEvent[]>([]);
+  const prevDeviceMap = useRef<Map<string, { status: string; ports: string; securityState?: string | null }>>(new Map());
+
+  useEffect(() => {
+    const prev = prevDeviceMap.current;
+    const next = new Map<string, { status: string; ports: string; securityState?: string | null }>();
+    const events: ActivityEvent[] = [];
+    const now = Date.now();
+
+    for (const d of devices) {
+      const name = d.label || d.hostname || d.ip;
+      const portsKey = (d.openPorts ?? []).join(',');
+      const old = prev.get(d.id);
+      next.set(d.id, { status: d.status, ports: portsKey, securityState: d.securityState });
+
+      if (!old) {
+        // Skip initial load flood - only emit if device was seen very recently
+        if (now - d.firstSeen < 30_000) {
+          events.push({ id: ++activitySeq.current, ts: now, kind: 'joined', label: name });
+        }
+        continue;
+      }
+      if (old.status !== 'online' && d.status === 'online') {
+        events.push({ id: ++activitySeq.current, ts: now, kind: 'returned', label: name });
+      } else if (old.status === 'online' && d.status !== 'online') {
+        events.push({ id: ++activitySeq.current, ts: now, kind: 'left', label: name });
+      }
+      if (old.ports !== portsKey && portsKey) {
+        const newPorts = (d.openPorts ?? []).filter((p) => !old.ports.split(',').includes(String(p)));
+        if (newPorts.length > 0) {
+          events.push({ id: ++activitySeq.current, ts: now, kind: 'ports', label: name, detail: newPorts.join(', ') });
+        }
+      }
+      if (!old.securityState && d.securityState === 'anomaly') {
+        events.push({ id: ++activitySeq.current, ts: now, kind: 'anomaly', label: name });
       }
     }
-    return Array.from(map.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 12);
+    // Detect devices that disappeared
+    for (const [id, old] of prev) {
+      if (!next.has(id) && old.status === 'online') {
+        events.push({ id: ++activitySeq.current, ts: now, kind: 'left', label: id });
+      }
+    }
+    prevDeviceMap.current = next;
+
+    if (events.length > 0) {
+      setActivityEvents((prev) => [...events, ...prev].slice(0, 50));
+    }
   }, [devices]);
 
-  const radarSize = 180;
-  const radarCx = radarSize / 2;
-  const radarCy = radarSize / 2;
-  const radarR = radarSize / 2 - 24;
-  const maxPortCount = Math.max(1, ...portMap.map(([, count]) => count));
+  // Tick "ago" labels every 10s
+  const [, setAgeTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setAgeTick((n) => n + 1), 10_000);
+    return () => clearInterval(id);
+  }, []);
 
   return (
     <section className="mt-8 pulse-hero">
@@ -354,40 +404,30 @@ function NetworkPulseHero({
         </div>
 
         <div className="pulse-mini">
-          <div className="pulse-mini-label pulse-mini-label--accent">Port Radar</div>
-          <svg viewBox={`0 0 ${radarSize} ${radarSize}`} className="radar-svg">
-            <circle cx={radarCx} cy={radarCy} r={radarR * 0.33} className="radar-ring" />
-            <circle cx={radarCx} cy={radarCy} r={radarR * 0.66} className="radar-ring" />
-            <circle cx={radarCx} cy={radarCy} r={radarR} className="radar-ring" />
-            {portMap.length === 0 && (
-              <text x={radarCx} y={radarCy} textAnchor="middle" dominantBaseline="central" className="radar-empty">
-                Scanning…
-              </text>
-            )}
-            {portMap.map(([port, count], i) => {
-              const angle = (i / Math.max(portMap.length, 1)) * Math.PI * 2 - Math.PI / 2;
-              const tipX = radarCx + Math.cos(angle) * radarR;
-              const tipY = radarCy + Math.sin(angle) * radarR;
-              const labelX = radarCx + Math.cos(angle) * (radarR + 14);
-              const labelY = radarCy + Math.sin(angle) * (radarR + 14);
-              const ratio = count / maxPortCount;
-              const dotR = radarR * (0.25 + ratio * 0.55);
-              const dotX = radarCx + Math.cos(angle) * dotR;
-              const dotY = radarCy + Math.sin(angle) * dotR;
-              return (
-                <g key={port}>
-                  <line x1={radarCx} y1={radarCy} x2={tipX} y2={tipY} className="radar-spoke" />
-                  <circle cx={dotX} cy={dotY} r={2.5 + ratio * 2.5} className="radar-dot">
-                    <title>{port}: {count} {count === 1 ? 'device' : 'devices'}</title>
-                  </circle>
-                  <text x={labelX} y={labelY} textAnchor="middle" dominantBaseline="central" className="radar-label">
-                    {port}
-                  </text>
-                </g>
-              );
-            })}
-            <circle cx={radarCx} cy={radarCy} r={2.5} className="radar-center" />
-          </svg>
+          <div className="pulse-mini-label pulse-mini-label--accent">Activity</div>
+          <div className="activity-feed">
+            {activityEvents.length === 0 && <div className="activity-empty">Waiting for changes...</div>}
+            {activityEvents.map((evt) => (
+              <div key={evt.id} className={cn('activity-item', `activity-item--${evt.kind}`)}>
+                <span className="activity-icon">
+                  {evt.kind === 'joined' && '+'}
+                  {evt.kind === 'returned' && '↑'}
+                  {evt.kind === 'left' && '↓'}
+                  {evt.kind === 'ports' && '⬡'}
+                  {evt.kind === 'anomaly' && '!'}
+                </span>
+                <span className="activity-text">
+                  <span className="activity-label">{evt.label}</span>
+                  {evt.kind === 'joined' && ' joined'}
+                  {evt.kind === 'returned' && ' came back'}
+                  {evt.kind === 'left' && ' went offline'}
+                  {evt.kind === 'ports' && <> ports {evt.detail}</>}
+                  {evt.kind === 'anomaly' && ' flagged'}
+                </span>
+                <span className="activity-ago">{formatAgo(evt.ts)}</span>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </section>
