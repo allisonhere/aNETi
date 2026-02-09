@@ -1,0 +1,10 @@
+node_modules
+dist
+out
+.git
+*.md
+LICENSE
+.dockerignore
+docker-compose.yml
+scripts
+docs

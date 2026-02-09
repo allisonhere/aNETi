@@ -62,12 +62,14 @@ npm run preview
 
 ### Headless Web Mode (Browser Access)
 
-Build and run the browser-accessible service:
+Build and run the browser-accessible service (no Electron required):
 
 ```bash
 npm run build:web
 npm run start:web
 ```
+
+`build:web` compiles both the React renderer and the Node.js backend in one step using standalone Vite + tsc -- no electron dependency needed.
 
 Then open:
 
@@ -75,62 +77,98 @@ Then open:
 
 Environment overrides:
 
-- `ANETI_WEB_HOST` (default `0.0.0.0`)
-- `ANETI_WEB_PORT` (default `8787`)
-- `ANETI_DATA_DIR` (default `/var/lib/aneti`)
-- `ANETI_WEB_DISABLE_AUTH=1` disables token auth (trusted network only)
+| Variable | Default | Description |
+|---|---|---|
+| `ANETI_WEB_HOST` | `0.0.0.0` | Listen address |
+| `ANETI_WEB_PORT` | `8787` | Listen port |
+| `ANETI_DATA_DIR` | `/var/lib/aneti` | Database and settings directory |
+| `ANETI_WEB_DISABLE_AUTH` | `0` | Set to `1` to disable token auth (trusted network only) |
+| `ANETI_SCAN_INTERVAL_MS` | `8000` | Scan interval in milliseconds |
+| `ANETI_SCAN_MAX_HOSTS` | `1024` | Max hosts per scan |
+| `ANETI_SCAN_BATCH_SIZE` | `64` | Concurrent scan batch size |
 
-## Proxmox One-Line Install (Debian/Ubuntu VM/LXC)
+## Docker
 
-Run this inside your Proxmox guest:
+### Quick Start
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/allisonhere/aNETi/main/scripts/proxmox-install.sh | sudo bash -s -- --web-service
+docker compose up -d
 ```
 
-What it does:
+Then open `http://<host>:8787/app`.
 
-- installs system dependencies needed by Electron and the scanner
+### Manual Run
+
+```bash
+docker build -t aneti .
+docker run -d \
+  --network host \
+  --cap-add NET_RAW \
+  --cap-add NET_ADMIN \
+  -v aneti-data:/var/lib/aneti \
+  --name aneti \
+  aneti
+```
+
+`--network host` is required so the scanner can reach devices on your LAN. `NET_RAW` and `NET_ADMIN` are needed for ping and ARP operations.
+
+To disable auth in a trusted environment:
+
+```bash
+docker run -d \
+  --network host \
+  --cap-add NET_RAW \
+  --cap-add NET_ADMIN \
+  -v aneti-data:/var/lib/aneti \
+  -e ANETI_WEB_DISABLE_AUTH=1 \
+  --name aneti \
+  aneti
+```
+
+## Proxmox Setup
+
+One script (`scripts/proxmox-setup.sh`) handles both cases -- it auto-detects where it's running:
+
+### On Proxmox Host (creates LXC + installs inside it)
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/allisonhere/aNETi/main/scripts/proxmox-setup.sh)"
+```
+
+Custom example:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/allisonhere/aNETi/main/scripts/proxmox-setup.sh)" -- --vmid 120 --hostname aneti --bridge vmbr0
+```
+
+### Inside Existing VM/LXC (installs directly)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/allisonhere/aNETi/main/scripts/proxmox-setup.sh | sudo bash -s -- --web-service
+```
+
+Disable token auth for trusted networks:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/allisonhere/aNETi/main/scripts/proxmox-setup.sh | sudo bash -s -- --web-service --web-disable-auth
+```
+
+### What it does
+
+- installs system dependencies (skips X11/Electron libs in web-service mode)
 - installs Node.js 20 if missing
 - clones `allisonhere/aNETi` into `/opt/aneti`
-- runs `npm ci` and `npm run build`
+- runs `npm ci` and `npm run build:web` (no electron needed)
 - enables `aneti-web.service` for browser access at port `8787`
+- prunes dev dependencies to minimize disk usage
 
-Custom install:
+### Notes
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/allisonhere/aNETi/main/scripts/proxmox-install.sh | sudo bash -s -- --repo allisonhere/aNETi --branch main --dir /opt/aneti --web-service --web-port 8787
-```
-
-Disable token auth for trusted internal networks:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/allisonhere/aNETi/main/scripts/proxmox-install.sh | sudo bash -s -- --web-service --web-disable-auth
-```
-
-## Proxmox LXC One-Line Create + Install (Run On Proxmox Host)
-
-This creates a new LXC and installs AnetI inside the container (not on host):
-
-```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/allisonhere/aNETi/main/scripts/proxmox-lxc-create.sh)"
-```
-
-Common custom example:
-
-```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/allisonhere/aNETi/main/scripts/proxmox-lxc-create.sh)" -- --vmid 120 --hostname aneti --bridge vmbr0
-```
-
-Notes:
-
-- run as `root` on Proxmox host
-- defaults to latest `debian-12-standard` template via `pveam`
-- auto-detects compatible template and CT storages unless `--storage` / `--template-storage` are set
-- creates a privileged CT (`--unprivileged 0`) for simpler network-scanner behavior
-- after creation, runs `scripts/proxmox-install.sh` inside the CT
+- run as `root`
+- on Proxmox host: auto-detects `pct` and creates a privileged LXC with `debian-12-standard`
+- auto-detects template and CT storages unless `--storage` / `--template-storage` are set
 - writes login details to `/root/aneti-lxc-<vmid>.txt` (override with `--password-file`)
-- installs browser mode by default (`aneti-web.service`)
+- use `--install-only` to force guest-mode install even on a Proxmox host
 - use `--web-disable-auth` if you do not want token prompts
 
 ## Settings Highlights
