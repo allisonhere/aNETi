@@ -33,7 +33,8 @@ Install options:
   --web-service             Enable headless web service (default on LXC, off on guest)
   --no-web-service          Skip headless web service
   --web-port N              Web service port (default: 8787)
-  --web-disable-auth        Disable API token auth
+  --web-require-auth        Enable API token auth (disabled by default)
+  --web-disable-auth        Disable API token auth (default)
   --skip-build              Skip build step
   --install-only            Force guest-mode install even on a Proxmox host
 
@@ -110,7 +111,7 @@ WEB_SERVICE="" # empty = auto (1 on host/lxc-create, 0 on guest)
 WEB_HOST="0.0.0.0"
 WEB_PORT="8787"
 WEB_DATA_DIR="/var/lib/aneti"
-WEB_DISABLE_AUTH=0
+WEB_DISABLE_AUTH=1
 INSTALL_ONLY=0
 
 # LXC creation options
@@ -221,6 +222,10 @@ while [ $# -gt 0 ]; do
     ;;
   --web-disable-auth)
     WEB_DISABLE_AUTH=1
+    shift
+    ;;
+  --web-require-auth)
+    WEB_DISABLE_AUTH=0
     shift
     ;;
   --install-only)
