@@ -590,25 +590,34 @@ export default function App() {
     return () => { cancelled = true; };
   }, [view]);
 
+  const [updateServerDown, setUpdateServerDown] = useState(false);
+  const consecutivePollFailures = useRef(0);
+
   useEffect(() => {
     if (!updatingSystem || !window.aneti?.updateStatus) return;
     let active = true;
+    consecutivePollFailures.current = 0;
     const poll = async () => {
       if (!active) return;
       try {
         const status = (await window.aneti!.updateStatus()) as typeof updateStatus;
         if (!active || !status) return;
+        consecutivePollFailures.current = 0;
+        setUpdateServerDown(false);
         setUpdateStatus(status);
         if (status.state === 'completed') {
           setUpdatingSystem(false);
           showToast('Update complete! Reloading...', 'success');
-          setTimeout(() => location.reload(), 1500);
+          setTimeout(() => location.reload(), 2000);
         } else if (status.state === 'failed') {
           setUpdatingSystem(false);
           showToast(`Update failed: ${status.error ?? 'unknown error'}`, 'error');
         }
       } catch {
-        // Server might be restarting — keep polling
+        consecutivePollFailures.current++;
+        if (consecutivePollFailures.current >= 2) {
+          setUpdateServerDown(true);
+        }
       }
     };
     const timer = setInterval(poll, 2000);
@@ -1995,25 +2004,35 @@ export default function App() {
                       </button>
                     )}
 
-                    {updatingSystem && updateStatus && updateStatus.state === 'in_progress' && (
-                      <div className="space-y-2">
-                        <div className="text-sm text-white/70">
-                          Updating: <span className="font-mono text-sky-300">{updateStatus.step}</span>
-                          <span className="ml-2 text-white/40">
-                            ({updateStatus.stepIndex}/{updateStatus.totalSteps})
-                          </span>
-                        </div>
-                        <div className="h-2 w-full overflow-hidden rounded-full bg-white/10">
-                          <div
-                            className="h-full rounded-full bg-sky-400 transition-all duration-500"
-                            style={{ width: `${(updateStatus.stepIndex / updateStatus.totalSteps) * 100}%` }}
-                          />
-                        </div>
+                    {updatingSystem && (
+                      <div className="update-progress">
+                        {updateServerDown ? (
+                          <div className="text-sm text-amber-300">
+                            <RefreshCw className="mr-2 inline-block h-4 w-4 animate-spin" />
+                            Service restarting… waiting for reconnect
+                          </div>
+                        ) : updateStatus && updateStatus.state === 'in_progress' ? (
+                          <>
+                            <div className="update-progress-label">
+                              <span className="update-progress-step">{updateStatus.step}</span>
+                              <span className="update-progress-count">
+                                {updateStatus.stepIndex} / {updateStatus.totalSteps}
+                              </span>
+                            </div>
+                            <div className="update-progress-track">
+                              <div
+                                className="update-progress-fill"
+                                style={{ width: `${(updateStatus.stepIndex / updateStatus.totalSteps) * 100}%` }}
+                              />
+                            </div>
+                          </>
+                        ) : (
+                          <div className="text-sm text-white/50">
+                            <RefreshCw className="mr-2 inline-block h-4 w-4 animate-spin" />
+                            Starting update…
+                          </div>
+                        )}
                       </div>
-                    )}
-
-                    {updatingSystem && (!updateStatus || updateStatus.state === 'in_progress') && updateStatus?.step === 'done' && (
-                      <div className="text-sm text-amber-300">Restarting service…</div>
                     )}
                   </div>
                 )}

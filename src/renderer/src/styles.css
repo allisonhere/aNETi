@@ -1000,6 +1000,43 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.update-progress {
+  margin-top: 0.75rem;
+}
+.update-progress-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  margin-bottom: 0.5rem;
+}
+.update-progress-step {
+  font-family: "SFMono-Regular", "SF Mono", "JetBrains Mono", monospace;
+  color: rgba(125, 211, 252, 0.9);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.update-progress-count {
+  flex-shrink: 0;
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 0.8rem;
+}
+.update-progress-track {
+  height: 0.5rem;
+  width: 100%;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+.update-progress-fill {
+  height: 100%;
+  border-radius: 9999px;
+  background: rgba(56, 189, 248, 0.7);
+  transition: width 500ms ease;
+}
 .update-section {
   margin-top: 1.25rem;
   padding-top: 1.25rem;
