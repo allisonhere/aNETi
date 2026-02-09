@@ -358,6 +358,7 @@ button {
   display: inline-flex;
   gap: 0.35rem;
   align-items: center;
+  flex-wrap: wrap;
 }
 .pulse-control-button {
   border-radius: 9999px;
