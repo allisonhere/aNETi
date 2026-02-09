@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+
 
 export type DeviceRecord = {
   id: string;
@@ -90,11 +91,12 @@ const createMemoryDatabase = () => {
 };
 
 export const createDatabase = async (dbPath: string) => {
-  const require = createRequire(import.meta.url);
   let initSqlJs: any = null;
 
   try {
-    initSqlJs = require('sql.js');
+    // @ts-ignore sql.js has no type declarations
+    const mod = await import('sql.js');
+    initSqlJs = mod.default ?? mod;
   } catch (error) {
     console.warn('sql.js not available, using in-memory store.', error);
   }
@@ -105,7 +107,8 @@ export const createDatabase = async (dbPath: string) => {
 
   let SQL: any;
   try {
-    const wasmPath = require.resolve('sql.js/dist/sql-wasm.wasm');
+    const wasmUrl = import.meta.resolve('sql.js/dist/sql-wasm.wasm');
+    const wasmPath = fileURLToPath(wasmUrl);
     SQL = await initSqlJs({ locateFile: () => wasmPath });
   } catch (error) {
     console.warn('sql.js WASM init failed, using in-memory store.', error);
