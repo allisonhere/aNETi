@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, writeFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, execSync } from 'node:child_process';
 
 export type DeploymentMode = 'docker' | 'bare-metal';
 
@@ -44,8 +44,17 @@ const compareSemver = (current: string, latest: string): boolean => {
   return lPat > cPat;
 };
 
+const getLocalCommitSha = (): string => {
+  try {
+    return execSync('git rev-parse HEAD', { cwd: process.cwd(), encoding: 'utf8' }).trim();
+  } catch {
+    return '';
+  }
+};
+
 export const checkForUpdate = async (): Promise<UpdateCheckResult> => {
   const currentVersion = getCurrentVersion();
+  const localSha = getLocalCommitSha();
 
   const [pkgRes, commitRes] = await Promise.all([
     fetch(`${GITHUB_API}/repos/${REPO}/contents/package.json?ref=main`, {
@@ -65,10 +74,13 @@ export const checkForUpdate = async (): Promise<UpdateCheckResult> => {
   const commitData = (await commitRes.json()) as { sha: string };
   const latestCommitSha = commitData.sha ?? '';
 
+  const newerVersion = compareSemver(currentVersion, latestVersion);
+  const differentCommit = localSha !== '' && latestCommitSha !== '' && localSha !== latestCommitSha;
+
   return {
     currentVersion,
     latestVersion,
-    updateAvailable: compareSemver(currentVersion, latestVersion),
+    updateAvailable: newerVersion || differentCommit,
     latestCommitSha,
   };
 };
