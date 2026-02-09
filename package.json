@@ -14,7 +14,7 @@
     "package:deb": "electron-builder --config electron-builder.yml --linux deb --publish never"
   },
   "dependencies": {
-    "better-sqlite3": "^12.6.2",
+    "sql.js": "^1.12.0",
     "bonjour-service": "^1.2.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.484.0",
