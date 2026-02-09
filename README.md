@@ -93,11 +93,36 @@ Environment overrides:
 
 ### Quick Start
 
+Create a `docker-compose.yml`:
+
+```yaml
+services:
+  aneti:
+    build: .
+    network_mode: host
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    volumes:
+      - aneti-data:/var/lib/aneti
+    environment:
+      - ANETI_WEB_HOST=0.0.0.0
+      - ANETI_WEB_PORT=8787
+      - ANETI_DATA_DIR=/var/lib/aneti
+      # - ANETI_WEB_DISABLE_AUTH=1
+    restart: unless-stopped
+
+volumes:
+  aneti-data:
+```
+
+Then run:
+
 ```bash
 docker compose up -d
 ```
 
-Then open `http://<host>:8787/app`.
+Open `http://<host>:8787/app`.
 
 ### Manual Run
 
