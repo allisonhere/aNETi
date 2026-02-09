@@ -103,7 +103,13 @@ export const clearStaleStatus = (dataDir: string) => {
     if (!existsSync(statusPath)) return;
     const raw = readFileSync(statusPath, 'utf8');
     const status = JSON.parse(raw) as UpdateStatus;
-    if (status.state === 'completed') {
+    if (status.state === 'in_progress') {
+      // Process just started and status says in_progress — the update completed
+      // (Docker: old container exited, helper replaced it, we're the new container)
+      writeFileSync(statusPath, JSON.stringify({
+        state: 'completed', step: 'done', stepIndex: status.totalSteps, totalSteps: status.totalSteps, startedAt: status.startedAt, error: null,
+      }));
+    } else if (status.state === 'completed') {
       const stat = statSync(statusPath);
       if (Date.now() - stat.mtimeMs > 60_000) {
         writeFileSync(statusPath, JSON.stringify({
