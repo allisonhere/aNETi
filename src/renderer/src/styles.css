@@ -992,10 +992,13 @@ button {
   box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.15);
 }
 .integration-token-field {
-  min-width: 22rem;
+  min-width: 0;
   max-width: 100%;
   font-family: "SFMono-Regular", "SF Mono", "JetBrains Mono", monospace;
+  font-size: 0.8rem;
   letter-spacing: 0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .update-section {
   margin-top: 1.25rem;
