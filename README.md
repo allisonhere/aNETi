@@ -93,41 +93,32 @@ Environment overrides:
 
 ### Quick Start
 
-```bash
-git clone https://github.com/allisonhere/aNETi.git
-cd aNETi
-docker compose up -d
+Save this as `docker-compose.yml` and run `docker compose up -d`:
+
+```yaml
+services:
+  aneti:
+    image: ghcr.io/allisonhere/aneti:latest
+    network_mode: host
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    volumes:
+      - aneti-data:/var/lib/aneti
+    environment:
+      - ANETI_WEB_HOST=0.0.0.0
+      - ANETI_WEB_PORT=8787
+      - ANETI_DATA_DIR=/var/lib/aneti
+      # - ANETI_WEB_DISABLE_AUTH=1
+    restart: unless-stopped
+
+volumes:
+  aneti-data:
 ```
 
-Open `http://<host>:8787/app`.
+Then open `http://<host>:8787/app`.
 
-### Manual Run
-
-```bash
-docker build -t aneti .
-docker run -d \
-  --network host \
-  --cap-add NET_RAW \
-  --cap-add NET_ADMIN \
-  -v aneti-data:/var/lib/aneti \
-  --name aneti \
-  aneti
-```
-
-`--network host` is required so the scanner can reach devices on your LAN. `NET_RAW` and `NET_ADMIN` are needed for ping and ARP operations.
-
-To disable auth in a trusted environment:
-
-```bash
-docker run -d \
-  --network host \
-  --cap-add NET_RAW \
-  --cap-add NET_ADMIN \
-  -v aneti-data:/var/lib/aneti \
-  -e ANETI_WEB_DISABLE_AUTH=1 \
-  --name aneti \
-  aneti
-```
+`network_mode: host` is required so the scanner can reach devices on your LAN. `NET_RAW` and `NET_ADMIN` are needed for ping and ARP operations. Uncomment `ANETI_WEB_DISABLE_AUTH=1` to skip token auth on trusted networks.
 
 ## Proxmox Setup
 
