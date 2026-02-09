@@ -108,6 +108,7 @@ services:
       - NET_RAW
       - NET_ADMIN
     volumes:
+      - /var/run/docker.sock:/var/run/docker.sock  # optional: enables one-click updates
       - aneti-data:/var/lib/aneti
     environment:
       - ANETI_WEB_HOST=0.0.0.0

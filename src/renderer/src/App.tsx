@@ -557,6 +557,7 @@ export default function App() {
     deploymentMode: 'docker' | 'bare-metal';
     nodeVersion: string;
     uptime: number;
+    dockerSocketAvailable?: boolean;
   } | null>(null);
   const [updateCheck, setUpdateCheck] = useState<{
     currentVersion: string;
@@ -1977,7 +1978,7 @@ export default function App() {
                   )}
                 </div>
 
-                {updateCheck?.updateAvailable && systemInfo?.deploymentMode === 'bare-metal' && (
+                {updateCheck?.updateAvailable && (systemInfo?.deploymentMode === 'bare-metal' || systemInfo?.dockerSocketAvailable) && (
                   <div className="mt-3">
                     {!updatingSystem && !updateStatus?.state?.match(/in_progress/) && (
                       <button
@@ -2038,7 +2039,7 @@ export default function App() {
                 )}
               </div>
 
-              {updateCheck?.updateAvailable && systemInfo?.deploymentMode === 'docker' && (
+              {updateCheck?.updateAvailable && systemInfo?.deploymentMode === 'docker' && !systemInfo?.dockerSocketAvailable && (
                 <div className="mt-4 space-y-3">
                   <p className="text-sm text-white/60">
                     Self-update is not available in Docker mode. Run this command on your host to update:

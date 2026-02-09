@@ -13,6 +13,7 @@ import {
   getUpdateStatus,
   clearStaleStatus,
   performUpdate,
+  isDockerSocketAvailable,
 } from './updater.js';
 import type { Device } from './types.js';
 
@@ -508,6 +509,7 @@ const server = createServer(async (request, response) => {
         deploymentMode: detectDeploymentMode(),
         nodeVersion: process.version,
         uptime: process.uptime(),
+        dockerSocketAvailable: isDockerSocketAvailable(),
       });
       return;
     }
@@ -523,7 +525,7 @@ const server = createServer(async (request, response) => {
     }
 
     if (request.method === 'POST' && url.pathname === '/api/system/update') {
-      const result = performUpdate(process.cwd(), dataDir);
+      const result = await Promise.resolve(performUpdate(process.cwd(), dataDir));
       writeJson(response, result.ok ? 200 : 400, result);
       return;
     }

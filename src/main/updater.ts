@@ -1,6 +1,8 @@
 import { existsSync, readFileSync, writeFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawn, execSync } from 'node:child_process';
+import { request as httpRequest } from 'node:http';
+import { hostname } from 'node:os';
 
 export type DeploymentMode = 'docker' | 'bare-metal';
 
@@ -114,10 +116,175 @@ export const clearStaleStatus = (dataDir: string) => {
   }
 };
 
-export const performUpdate = (installDir: string, dataDir: string): { ok: boolean; error?: string } => {
+const DOCKER_SOCKET = '/var/run/docker.sock';
+const DOCKER_IMAGE = 'ghcr.io/allisonhere/aneti';
+
+export const isDockerSocketAvailable = (): boolean =>
+  existsSync(DOCKER_SOCKET);
+
+const dockerRequest = (
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<{ status: number; data: any }> =>
+  new Promise((resolve, reject) => {
+    const payload = body != null ? JSON.stringify(body) : undefined;
+    const req = httpRequest(
+      {
+        socketPath: DOCKER_SOCKET,
+        path,
+        method,
+        headers: {
+          ...(payload ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } : {}),
+        },
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => {
+          const raw = Buffer.concat(chunks).toString('utf8');
+          let data: any;
+          try { data = JSON.parse(raw); } catch { data = raw; }
+          resolve({ status: res.statusCode ?? 0, data });
+        });
+      },
+    );
+    req.on('error', reject);
+    if (payload) req.write(payload);
+    req.end();
+  });
+
+const pullImage = (image: string, tag: string): Promise<void> =>
+  new Promise((resolve, reject) => {
+    const req = httpRequest(
+      {
+        socketPath: DOCKER_SOCKET,
+        path: `/images/create?fromImage=${encodeURIComponent(image)}&tag=${encodeURIComponent(tag)}`,
+        method: 'POST',
+      },
+      (res) => {
+        // Docker streams JSON progress lines; consume until EOF
+        res.on('data', () => {});
+        res.on('end', () => {
+          if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) resolve();
+          else reject(new Error(`Image pull failed: HTTP ${res.statusCode}`));
+        });
+      },
+    );
+    req.on('error', reject);
+    req.end();
+  });
+
+const performDockerUpdate = async (dataDir: string): Promise<{ ok: boolean; error?: string }> => {
+  const statusPath = join(dataDir, '.update-status');
+
+  const writeStatus = (state: string, step: string, stepIndex: number) => {
+    writeFileSync(statusPath, JSON.stringify({
+      state, step, stepIndex, totalSteps: 3, startedAt: Date.now(), error: null,
+    }));
+  };
+
+  try {
+    writeStatus('in_progress', 'Pulling latest image', 1);
+    await pullImage(DOCKER_IMAGE, 'latest');
+
+    writeStatus('in_progress', 'Inspecting container', 2);
+    const selfId = hostname();
+    const inspect = await dockerRequest('GET', `/containers/${selfId}/json`);
+    if (inspect.status !== 200) {
+      throw new Error(`Cannot inspect self (${selfId}): HTTP ${inspect.status}`);
+    }
+
+    const containerInfo = inspect.data;
+    const containerName = (containerInfo.Name ?? '').replace(/^\//, '');
+    const config = containerInfo.Config ?? {};
+    const hostConfig = containerInfo.HostConfig ?? {};
+    const networkSettings = containerInfo.NetworkSettings ?? {};
+
+    // Build the create config for the replacement container
+    const createConfig: Record<string, any> = {
+      Image: `${DOCKER_IMAGE}:latest`,
+      Env: config.Env ?? [],
+      ExposedPorts: config.ExposedPorts ?? {},
+      Labels: config.Labels ?? {},
+      Volumes: config.Volumes ?? {},
+      HostConfig: {
+        ...hostConfig,
+        // Ensure docker socket is mounted in new container too
+        Binds: hostConfig.Binds ?? [],
+      },
+      NetworkingConfig: {},
+    };
+
+    // Preserve the primary network
+    const networks = networkSettings.Networks ?? {};
+    const networkNames = Object.keys(networks);
+    if (networkNames.length > 0) {
+      const primary = networkNames[0]!;
+      createConfig.NetworkingConfig = {
+        EndpointsConfig: {
+          [primary]: {
+            IPAMConfig: networks[primary].IPAMConfig ?? undefined,
+          },
+        },
+      };
+    }
+
+    writeStatus('in_progress', 'Spawning update helper', 3);
+
+    // Spawn helper container from the new image
+    const helperConfig = {
+      Image: `${DOCKER_IMAGE}:latest`,
+      Cmd: ['node', 'out/web/update-helper.js'],
+      Env: [
+        `ANETI_UPDATE_TARGET=${selfId}`,
+        `ANETI_UPDATE_CONFIG=${JSON.stringify(createConfig)}`,
+        `ANETI_UPDATE_NAME=${containerName}`,
+      ],
+      HostConfig: {
+        Binds: [`${DOCKER_SOCKET}:${DOCKER_SOCKET}`],
+        AutoRemove: true,
+        NetworkMode: 'none',
+      },
+    };
+
+    const helperRes = await dockerRequest('POST', '/containers/create?name=aneti-updater', helperConfig);
+    if (helperRes.status !== 201) {
+      // If name conflict, try removing stale helper first
+      if (helperRes.status === 409) {
+        await dockerRequest('DELETE', '/containers/aneti-updater?force=true');
+        const retry = await dockerRequest('POST', '/containers/create?name=aneti-updater', helperConfig);
+        if (retry.status !== 201) throw new Error(`Helper create retry failed: HTTP ${retry.status}`);
+        await dockerRequest('POST', `/containers/${retry.data.Id}/start`);
+      } else {
+        throw new Error(`Helper create failed: HTTP ${helperRes.status} — ${JSON.stringify(helperRes.data)}`);
+      }
+    } else {
+      await dockerRequest('POST', `/containers/${helperRes.data.Id}/start`);
+    }
+
+    writeStatus('in_progress', 'Restarting', 3);
+
+    // Give helper time to start, then exit so the old container stops
+    setTimeout(() => process.exit(0), 2000);
+
+    return { ok: true };
+  } catch (err) {
+    writeFileSync(statusPath, JSON.stringify({
+      state: 'failed', step: 'Docker update failed', stepIndex: 0, totalSteps: 3,
+      startedAt: Date.now(), error: String((err as Error).message ?? err),
+    }));
+    return { ok: false, error: String((err as Error).message ?? err) };
+  }
+};
+
+export const performUpdate = (installDir: string, dataDir: string): { ok: boolean; error?: string } | Promise<{ ok: boolean; error?: string }> => {
   const mode = detectDeploymentMode();
   if (mode === 'docker') {
-    return { ok: false, error: 'Self-update is not available in Docker mode' };
+    if (!isDockerSocketAvailable()) {
+      return { ok: false, error: 'Docker socket not mounted. Add /var/run/docker.sock volume for one-click updates.' };
+    }
+    return performDockerUpdate(dataDir);
   }
 
   const status = getUpdateStatus(dataDir);

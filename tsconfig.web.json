@@ -16,6 +16,7 @@
     "src/main/settings.ts",
     "src/main/types.ts",
     "src/main/ai.ts",
-    "src/main/updater.ts"
+    "src/main/updater.ts",
+    "src/main/update-helper.ts"
   ]
 }
