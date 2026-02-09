@@ -996,6 +996,11 @@ button {
   font-family: "SFMono-Regular", "SF Mono", "JetBrains Mono", monospace;
   letter-spacing: 0.01em;
 }
+.update-section {
+  margin-top: 1.25rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
 .header-bar {
   display: flex;
   flex-wrap: wrap;

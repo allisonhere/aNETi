@@ -1928,90 +1928,96 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="mt-5 flex flex-wrap items-center gap-3">
-                <button
-                  type="button"
-                  className="primary-button"
-                  disabled={checkingForUpdate}
-                  onClick={async () => {
-                    if (!window.aneti?.updateCheck) return;
-                    setCheckingForUpdate(true);
-                    try {
-                      const result = (await window.aneti.updateCheck()) as typeof updateCheck;
-                      setUpdateCheck(result);
-                      if (result && !result.updateAvailable) {
-                        showToast('You are running the latest version', 'success');
+              <div className="update-section">
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    className="primary-button"
+                    disabled={checkingForUpdate}
+                    onClick={async () => {
+                      if (!window.aneti?.updateCheck) return;
+                      setCheckingForUpdate(true);
+                      try {
+                        const result = (await window.aneti.updateCheck()) as typeof updateCheck;
+                        setUpdateCheck(result);
+                      } catch {
+                        showToast('Failed to check for updates', 'error');
+                      } finally {
+                        setCheckingForUpdate(false);
                       }
-                    } catch {
-                      showToast('Failed to check for updates', 'error');
-                    } finally {
-                      setCheckingForUpdate(false);
-                    }
-                  }}
-                >
-                  <RefreshCw className={cn('mr-2 inline-block h-4 w-4', checkingForUpdate && 'animate-spin')} />
-                  {checkingForUpdate ? 'Checking…' : 'Check for updates'}
-                </button>
+                    }}
+                  >
+                    <RefreshCw className={cn('mr-2 inline-block h-4 w-4', checkingForUpdate && 'animate-spin')} />
+                    {checkingForUpdate ? 'Checking…' : 'Check for updates'}
+                  </button>
 
-                {updateCheck?.updateAvailable && (
-                  <span className="text-sm text-emerald-300">
-                    Update available: <span className="font-mono">{updateCheck.latestVersion}</span>
-                    <span className="ml-1 text-white/40 font-mono text-xs">
-                      ({updateCheck.latestCommitSha.slice(0, 7)})
+                  {updateCheck && !updateCheck.updateAvailable && (
+                    <span className="text-sm text-emerald-300">
+                      <CircleCheck className="mr-1 inline-block h-4 w-4" />
+                      Up to date
                     </span>
-                  </span>
-                )}
-              </div>
-
-              {updateCheck?.updateAvailable && systemInfo?.deploymentMode === 'bare-metal' && (
-                <div className="mt-4">
-                  {!updatingSystem && !updateStatus?.state?.match(/in_progress/) && (
-                    <button
-                      type="button"
-                      className="primary-button"
-                      onClick={async () => {
-                        if (!window.aneti?.updateStart) return;
-                        setUpdatingSystem(true);
-                        setUpdateStatus(null);
-                        try {
-                          const result = (await window.aneti.updateStart()) as { ok: boolean; error?: string };
-                          if (!result?.ok) {
-                            showToast(`Update failed: ${result?.error ?? 'unknown error'}`, 'error');
-                            setUpdatingSystem(false);
-                          }
-                        } catch {
-                          showToast('Failed to start update', 'error');
-                          setUpdatingSystem(false);
-                        }
-                      }}
-                    >
-                      <Download className="mr-2 inline-block h-4 w-4" />
-                      Update now
-                    </button>
                   )}
 
-                  {updatingSystem && updateStatus && updateStatus.state === 'in_progress' && (
-                    <div className="space-y-2">
-                      <div className="text-sm text-white/70">
-                        Updating: <span className="font-mono text-sky-300">{updateStatus.step}</span>
-                        <span className="ml-2 text-white/40">
-                          ({updateStatus.stepIndex}/{updateStatus.totalSteps})
-                        </span>
-                      </div>
-                      <div className="h-2 w-full overflow-hidden rounded-full bg-white/10">
-                        <div
-                          className="h-full rounded-full bg-sky-400 transition-all duration-500"
-                          style={{ width: `${(updateStatus.stepIndex / updateStatus.totalSteps) * 100}%` }}
-                        />
-                      </div>
-                    </div>
-                  )}
-
-                  {updatingSystem && (!updateStatus || updateStatus.state === 'in_progress') && updateStatus?.step === 'done' && (
-                    <div className="text-sm text-amber-300">Restarting service…</div>
+                  {updateCheck?.updateAvailable && (
+                    <span className="text-sm text-amber-300">
+                      Update available: <span className="font-mono">{updateCheck.latestVersion}</span>
+                      <span className="ml-1 text-white/40 font-mono text-xs">
+                        ({updateCheck.latestCommitSha.slice(0, 7)})
+                      </span>
+                    </span>
                   )}
                 </div>
-              )}
+
+                {updateCheck?.updateAvailable && systemInfo?.deploymentMode === 'bare-metal' && (
+                  <div className="mt-3">
+                    {!updatingSystem && !updateStatus?.state?.match(/in_progress/) && (
+                      <button
+                        type="button"
+                        className="primary-button"
+                        onClick={async () => {
+                          if (!window.aneti?.updateStart) return;
+                          setUpdatingSystem(true);
+                          setUpdateStatus(null);
+                          try {
+                            const result = (await window.aneti.updateStart()) as { ok: boolean; error?: string };
+                            if (!result?.ok) {
+                              showToast(`Update failed: ${result?.error ?? 'unknown error'}`, 'error');
+                              setUpdatingSystem(false);
+                            }
+                          } catch {
+                            showToast('Failed to start update', 'error');
+                            setUpdatingSystem(false);
+                          }
+                        }}
+                      >
+                        <Download className="mr-2 inline-block h-4 w-4" />
+                        Update now
+                      </button>
+                    )}
+
+                    {updatingSystem && updateStatus && updateStatus.state === 'in_progress' && (
+                      <div className="space-y-2">
+                        <div className="text-sm text-white/70">
+                          Updating: <span className="font-mono text-sky-300">{updateStatus.step}</span>
+                          <span className="ml-2 text-white/40">
+                            ({updateStatus.stepIndex}/{updateStatus.totalSteps})
+                          </span>
+                        </div>
+                        <div className="h-2 w-full overflow-hidden rounded-full bg-white/10">
+                          <div
+                            className="h-full rounded-full bg-sky-400 transition-all duration-500"
+                            style={{ width: `${(updateStatus.stepIndex / updateStatus.totalSteps) * 100}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {updatingSystem && (!updateStatus || updateStatus.state === 'in_progress') && updateStatus?.step === 'done' && (
+                      <div className="text-sm text-amber-300">Restarting service…</div>
+                    )}
+                  </div>
+                )}
+              </div>
 
               {updateCheck?.updateAvailable && systemInfo?.deploymentMode === 'docker' && (
                 <div className="mt-4 space-y-3">
