@@ -393,6 +393,11 @@ button {
   background: rgba(248, 113, 113, 0.2);
   color: #fecaca;
 }
+.pulse-control-button--purple.pulse-control-button--active {
+  border-color: rgba(167, 139, 250, 0.55);
+  background: rgba(167, 139, 250, 0.2);
+  color: #ddd6fe;
+}
 .pulse-chip {
   display: inline-flex;
   align-items: center;
@@ -439,6 +444,11 @@ button {
   color: #fcd34d;
   background: rgba(245, 158, 11, 0.16);
 }
+.pulse-chip--purple {
+  border-color: rgba(167, 139, 250, 0.5);
+  color: #c4b5fd;
+  background: rgba(167, 139, 250, 0.16);
+}
 .pulse-grid {
   margin-top: 0.9rem;
   display: grid;
@@ -483,6 +493,11 @@ button {
   stroke-width: 1.8;
   filter: drop-shadow(0 0 6px rgba(245, 158, 11, 0.4));
 }
+.pulse-line--purple {
+  stroke: #a78bfa;
+  stroke-width: 1.8;
+  filter: drop-shadow(0 0 6px rgba(167, 139, 250, 0.45));
+}
 .pulse-line--anomaly {
   stroke: #f87171;
   stroke-width: 1.8;
@@ -500,18 +515,40 @@ button {
   letter-spacing: 0.18em;
   color: rgba(248, 113, 113, 0.84);
 }
-.pulse-mini-svg {
-  width: 100%;
-  height: 2.8rem;
-  margin-top: 0.35rem;
+.pulse-mini-label--accent {
+  color: rgba(var(--accent-300-rgb), 0.84);
 }
-.pulse-mini-line {
+.radar-svg {
+  width: 100%;
+  aspect-ratio: 1;
+  margin-top: 0.3rem;
+}
+.radar-ring {
   fill: none;
-  stroke: #f87171;
-  stroke-width: 2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  filter: drop-shadow(0 0 7px rgba(248, 113, 113, 0.38));
+  stroke: rgba(148, 163, 184, 0.12);
+  stroke-width: 0.8;
+}
+.radar-spoke {
+  stroke: rgba(148, 163, 184, 0.15);
+  stroke-width: 0.7;
+}
+.radar-center {
+  fill: rgba(var(--accent-400-rgb), 0.7);
+}
+.radar-dot {
+  fill: rgb(var(--accent-400-rgb));
+  filter: drop-shadow(0 0 4px rgba(var(--accent-400-rgb), 0.6));
+  transition: cx 0.6s ease, cy 0.6s ease, r 0.6s ease;
+}
+.radar-label {
+  font-size: 7px;
+  fill: rgba(226, 232, 240, 0.55);
+  font-variant-numeric: tabular-nums;
+}
+.radar-empty {
+  font-size: 9px;
+  fill: rgba(148, 163, 184, 0.5);
+  letter-spacing: 0.08em;
 }
 @keyframes pulse-sweep {
   0% { transform: translateX(-100%); }

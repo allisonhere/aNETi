@@ -105,6 +105,8 @@ type PulseSample = {
   rejoins5m: number;
   rejoins15m: number;
   trusted: number;
+  avgLatency: number;
+  totalPorts: number;
 };
 
 const formatTimestamp = (value: number) =>
@@ -139,30 +141,36 @@ function StatCard({ label, value, tone }: { label: string; value: string; tone?:
 
 function NetworkPulseHero({
   samples,
+  devices,
   onlineCount,
   trustedCount,
   anomalyCount,
   newDevices,
   rejoins,
+  avgLatency,
   windowLabel,
   showNew,
   showRejoins,
   showAnomalies,
+  showLatency,
   onWindowChange,
   onToggleLine,
 }: {
   samples: PulseSample[];
+  devices: Device[];
   onlineCount: number;
   trustedCount: number;
   anomalyCount: number;
   newDevices: number;
   rejoins: number;
+  avgLatency: number;
   windowLabel: '1m' | '5m' | '15m';
   showNew: boolean;
   showRejoins: boolean;
   showAnomalies: boolean;
+  showLatency: boolean;
   onWindowChange: (window: '1m' | '5m' | '15m') => void;
-  onToggleLine: (line: 'new' | 'rejoins' | 'anomalies') => void;
+  onToggleLine: (line: 'new' | 'rejoins' | 'anomalies' | 'latency') => void;
 }) {
   const width = 760;
   const height = 170;
@@ -213,33 +221,38 @@ function NetworkPulseHero({
     if (windowLabel === '15m') return sample.rejoins15m;
     return sample.rejoins5m;
   });
+  const latencySeries = samples.map((sample) => sample.avgLatency);
   const maxOnline = Math.max(2, ...onlineSeries);
   const maxAnomaly = Math.max(1, ...anomalySeries);
   const maxNew = Math.max(1, ...newSeries);
   const maxRejoin = Math.max(1, ...rejoinSeries);
+  const maxLatency = Math.max(1, ...latencySeries);
 
   const onlinePath = buildLinePath(onlineSeries, maxOnline);
   const onlineAreaPath = buildAreaPath(onlineSeries, maxOnline);
   const anomalyPath = buildLinePath(anomalySeries, maxAnomaly);
   const newPath = buildLinePath(newSeries, maxNew);
   const rejoinPath = buildLinePath(rejoinSeries, maxRejoin);
+  const latencyPath = buildLinePath(latencySeries, maxLatency);
 
-  const anomalyMiniWidth = 200;
-  const anomalyMiniHeight = 46;
-  const miniPad = 5;
-  const miniValues = anomalySeries.slice(-32);
-  const miniMax = Math.max(1, ...miniValues);
-  const miniStep = miniValues.length > 1 ? (anomalyMiniWidth - miniPad * 2) / (miniValues.length - 1) : 0;
-  const miniPath =
-    miniValues.length === 0
-      ? ''
-      : miniValues
-          .map((value, index) => {
-            const x = miniPad + miniStep * index;
-            const y = anomalyMiniHeight - miniPad - (value / miniMax) * (anomalyMiniHeight - miniPad * 2);
-            return `${index === 0 ? 'M' : 'L'} ${x} ${y}`;
-          })
-          .join(' ');
+  const portMap = useMemo(() => {
+    const map = new Map<number, number>();
+    for (const device of devices) {
+      if (!device.openPorts) continue;
+      for (const port of device.openPorts) {
+        map.set(port, (map.get(port) ?? 0) + 1);
+      }
+    }
+    return Array.from(map.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 12);
+  }, [devices]);
+
+  const radarSize = 180;
+  const radarCx = radarSize / 2;
+  const radarCy = radarSize / 2;
+  const radarR = radarSize / 2 - 24;
+  const maxPortCount = Math.max(1, ...portMap.map(([, count]) => count));
 
   return (
     <section className="mt-8 pulse-hero">
@@ -268,6 +281,10 @@ function NetworkPulseHero({
           <span className="pulse-chip pulse-chip--amber">
             <Activity className="pulse-chip-icon" />
             Rejoins / {windowLabel} {rejoins}
+          </span>
+          <span className="pulse-chip pulse-chip--purple">
+            <Activity className="pulse-chip-icon" />
+            Latency {avgLatency > 0 ? `${avgLatency} ms` : '—'}
           </span>
         </div>
       </div>
@@ -307,6 +324,13 @@ function NetworkPulseHero({
           >
             Anomalies
           </button>
+          <button
+            type="button"
+            className={cn('pulse-control-button pulse-control-button--purple', showLatency && 'pulse-control-button--active')}
+            onClick={() => onToggleLine('latency')}
+          >
+            Latency
+          </button>
         </div>
       </div>
 
@@ -325,13 +349,44 @@ function NetworkPulseHero({
             {showNew && <path d={newPath} className="pulse-line pulse-line--cyan" />}
             {showRejoins && <path d={rejoinPath} className="pulse-line pulse-line--amber" />}
             {showAnomalies && <path d={anomalyPath} className="pulse-line pulse-line--anomaly" />}
+            {showLatency && <path d={latencyPath} className="pulse-line pulse-line--purple" />}
           </svg>
         </div>
 
         <div className="pulse-mini">
-          <div className="pulse-mini-label">Anomaly Sparkline</div>
-          <svg viewBox={`0 0 ${anomalyMiniWidth} ${anomalyMiniHeight}`} className="pulse-mini-svg">
-            <path d={miniPath} className="pulse-mini-line" />
+          <div className="pulse-mini-label pulse-mini-label--accent">Port Radar</div>
+          <svg viewBox={`0 0 ${radarSize} ${radarSize}`} className="radar-svg">
+            <circle cx={radarCx} cy={radarCy} r={radarR * 0.33} className="radar-ring" />
+            <circle cx={radarCx} cy={radarCy} r={radarR * 0.66} className="radar-ring" />
+            <circle cx={radarCx} cy={radarCy} r={radarR} className="radar-ring" />
+            {portMap.length === 0 && (
+              <text x={radarCx} y={radarCy} textAnchor="middle" dominantBaseline="central" className="radar-empty">
+                Scanning…
+              </text>
+            )}
+            {portMap.map(([port, count], i) => {
+              const angle = (i / Math.max(portMap.length, 1)) * Math.PI * 2 - Math.PI / 2;
+              const tipX = radarCx + Math.cos(angle) * radarR;
+              const tipY = radarCy + Math.sin(angle) * radarR;
+              const labelX = radarCx + Math.cos(angle) * (radarR + 14);
+              const labelY = radarCy + Math.sin(angle) * (radarR + 14);
+              const ratio = count / maxPortCount;
+              const dotR = radarR * (0.25 + ratio * 0.55);
+              const dotX = radarCx + Math.cos(angle) * dotR;
+              const dotY = radarCy + Math.sin(angle) * dotR;
+              return (
+                <g key={port}>
+                  <line x1={radarCx} y1={radarCy} x2={tipX} y2={tipY} className="radar-spoke" />
+                  <circle cx={dotX} cy={dotY} r={2.5 + ratio * 2.5} className="radar-dot">
+                    <title>{port}: {count} {count === 1 ? 'device' : 'devices'}</title>
+                  </circle>
+                  <text x={labelX} y={labelY} textAnchor="middle" dominantBaseline="central" className="radar-label">
+                    {port}
+                  </text>
+                </g>
+              );
+            })}
+            <circle cx={radarCx} cy={radarCy} r={2.5} className="radar-center" />
           </svg>
         </div>
       </div>
@@ -451,13 +506,13 @@ export default function App() {
     new: true,
     rejoins: true,
     anomalies: true,
+    latency: true,
   });
   const { toasts, showToast, dismissToast } = useToast();
   const knownIds = useRef(new Set<string>());
   const hydratedFromDb = useRef(false);
   const hasScanResult = useRef(false);
   const initialScanHandled = useRef(false);
-  const lastPulseSampleAt = useRef(0);
   const statusById = useRef(new Map<string, Device['status']>());
 
   useEffect(() => {
@@ -700,6 +755,15 @@ export default function App() {
   }, [devices, expandedDeviceId]);
 
   const offlineCount = devices.length - onlineCount;
+  const avgLatency = useMemo(() => {
+    const withLatency = devices.filter((d) => d.status === 'online' && d.latencyMs && d.latencyMs > 0);
+    if (withLatency.length === 0) return 0;
+    return Math.round(withLatency.reduce((sum, d) => sum + (d.latencyMs ?? 0), 0) / withLatency.length);
+  }, [devices]);
+  const totalPorts = useMemo(
+    () => devices.reduce((sum, d) => sum + (d.openPorts?.length ?? 0), 0),
+    [devices]
+  );
   const anomalyCount = useMemo(
     () => devices.filter((device) => device.securityState === 'anomaly').length,
     [devices]
@@ -1061,40 +1125,44 @@ export default function App() {
     setApiPortDraft(settings.integration.apiPort ?? 8787);
   }, [settings?.integration?.apiPort]);
 
+  const pulseDataRef = useRef({
+    onlineCount, anomalyCount, newDevices1m, newDevices5m, newDevices15m,
+    rejoins1m, rejoins5m, rejoins15m, trustedCount, avgLatency, totalPorts,
+  });
+  pulseDataRef.current = {
+    onlineCount, anomalyCount, newDevices1m, newDevices5m, newDevices15m,
+    rejoins1m, rejoins5m, rejoins15m, trustedCount, avgLatency, totalPorts,
+  };
+
   useEffect(() => {
-    const now = Date.now();
-    if (now - lastPulseSampleAt.current < 1200 && pulseSamples.length > 0) return;
-    lastPulseSampleAt.current = now;
-    setPulseSamples((prev) => {
-      const next = [
-        ...prev,
-        {
-          at: now,
-          online: onlineCount,
-          anomalies: anomalyCount,
-          newDevices1m,
-          newDevices5m,
-          newDevices15m,
-          rejoins1m,
-          rejoins5m,
-          rejoins15m,
-          trusted: trustedCount,
-        },
-      ];
-      return next.slice(-72);
-    });
-  }, [
-    onlineCount,
-    anomalyCount,
-    newDevices1m,
-    newDevices5m,
-    newDevices15m,
-    rejoins1m,
-    rejoins5m,
-    rejoins15m,
-    trustedCount,
-    pulseSamples.length,
-  ]);
+    const pushSample = () => {
+      const now = Date.now();
+      const d = pulseDataRef.current;
+      setPulseSamples((prev) => {
+        const next = [
+          ...prev,
+          {
+            at: now,
+            online: d.onlineCount,
+            anomalies: d.anomalyCount,
+            newDevices1m: d.newDevices1m,
+            newDevices5m: d.newDevices5m,
+            newDevices15m: d.newDevices15m,
+            rejoins1m: d.rejoins1m,
+            rejoins5m: d.rejoins5m,
+            rejoins15m: d.rejoins15m,
+            trusted: d.trustedCount,
+            avgLatency: d.avgLatency,
+            totalPorts: d.totalPorts,
+          },
+        ];
+        return next.slice(-72);
+      });
+    };
+    pushSample();
+    const id = setInterval(pushSample, 2000);
+    return () => clearInterval(id);
+  }, []);
 
   const pulseNewValue = pulseWindow === '1m' ? newDevices1m : pulseWindow === '15m' ? newDevices15m : newDevices5m;
   const pulseRejoinValue = pulseWindow === '1m' ? rejoins1m : pulseWindow === '15m' ? rejoins15m : rejoins5m;
@@ -1206,15 +1274,18 @@ export default function App() {
           <>
             <NetworkPulseHero
               samples={pulseSamples}
+              devices={devices}
               onlineCount={onlineCount}
               trustedCount={trustedCount}
               anomalyCount={anomalyCount}
               newDevices={pulseNewValue}
               rejoins={pulseRejoinValue}
+              avgLatency={avgLatency}
               windowLabel={pulseWindow}
               showNew={pulseLines.new}
               showRejoins={pulseLines.rejoins}
               showAnomalies={pulseLines.anomalies}
+              showLatency={pulseLines.latency}
               onWindowChange={setPulseWindow}
               onToggleLine={(line) =>
                 setPulseLines((prev) => ({

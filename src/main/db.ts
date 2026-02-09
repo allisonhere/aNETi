@@ -15,6 +15,7 @@ export type DeviceRecord = {
   status: 'online' | 'offline';
   latencyMs?: number | null;
   openPorts?: number[];
+  securityState?: 'trusted' | 'anomaly' | null;
 };
 
 export type AlertRecord = {
@@ -46,7 +47,8 @@ const createMemoryDatabase = () => {
       const label = device.label ?? existing?.label;
       const mdnsName = device.mdnsName ?? existing?.mdnsName;
       const openPorts = device.openPorts ?? existing?.openPorts;
-      deviceMap.set(device.id, { ...existing, ...device, label, mdnsName, openPorts });
+      const securityState = device.securityState ?? existing?.securityState;
+      deviceMap.set(device.id, { ...existing, ...device, label, mdnsName, openPorts, securityState });
       sightings.unshift({
         id: sightingId++,
         deviceId: device.id,
@@ -193,6 +195,7 @@ export const createDatabase = async (dbPath: string) => {
   ensureColumn('devices', 'label', 'TEXT');
   ensureColumn('devices', 'mdns_name', 'TEXT');
   ensureColumn('devices', 'open_ports', 'TEXT');
+  ensureColumn('devices', 'security_state', 'TEXT');
   ensureColumn('sightings', 'status', 'TEXT');
 
   saveToDisk();
@@ -204,9 +207,9 @@ export const createDatabase = async (dbPath: string) => {
       for (const device of devices) {
         db.run(
           `INSERT INTO devices (
-            id, ip, mac, hostname, vendor, mdns_name, label, first_seen, last_seen, status, latency_ms, open_ports
+            id, ip, mac, hostname, vendor, mdns_name, label, first_seen, last_seen, status, latency_ms, open_ports, security_state
           ) VALUES (
-            $id, $ip, $mac, $hostname, $vendor, $mdnsName, $label, $firstSeen, $lastSeen, $status, $latencyMs, $openPorts
+            $id, $ip, $mac, $hostname, $vendor, $mdnsName, $label, $firstSeen, $lastSeen, $status, $latencyMs, $openPorts, $securityState
           )
           ON CONFLICT(id) DO UPDATE SET
             ip = excluded.ip,
@@ -218,7 +221,8 @@ export const createDatabase = async (dbPath: string) => {
             last_seen = excluded.last_seen,
             status = excluded.status,
             latency_ms = excluded.latency_ms,
-            open_ports = COALESCE(excluded.open_ports, devices.open_ports);`,
+            open_ports = COALESCE(excluded.open_ports, devices.open_ports),
+            security_state = COALESCE(excluded.security_state, devices.security_state);`,
           {
             $id: device.id,
             $ip: device.ip,
@@ -232,6 +236,7 @@ export const createDatabase = async (dbPath: string) => {
             $status: device.status,
             $latencyMs: device.latencyMs ?? null,
             $openPorts: device.openPorts ? JSON.stringify(device.openPorts) : null,
+            $securityState: device.securityState ?? null,
           }
         );
 
@@ -270,7 +275,7 @@ export const createDatabase = async (dbPath: string) => {
     const rows = queryAll(
       `SELECT id, ip, mac, hostname, vendor, mdns_name as mdnsName, label,
               first_seen as firstSeen, last_seen as lastSeen, status, latency_ms as latencyMs,
-              open_ports as openPortsJson
+              open_ports as openPortsJson, security_state as securityState
        FROM devices ORDER BY last_seen DESC;`
     );
     return rows.map((row: any) => {

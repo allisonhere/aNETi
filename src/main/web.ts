@@ -26,6 +26,7 @@ const scanner = createScanner();
 const ai = createAiClient((provider) => settings.getSecret(provider));
 const labelById = new Map<string, string>();
 const baselineDeviceIds = new Set<string>();
+const anomalyIds = new Set<string>();
 const lastSummaryAtById = new Map<string, number>();
 const aiQueue: Device[] = [];
 let aiWorking = false;
@@ -304,9 +305,13 @@ const serveStatic = (urlPath: string, response: ServerResponse): boolean => {
 
 const seedKnownDevices = () => {
   const existing = db.listDevices() as Device[];
+  const trustedIds = new Set(settings.getSecurity().trustedDeviceIds ?? []);
   for (const device of existing) {
     baselineDeviceIds.add(device.id);
     if (device.label) labelById.set(device.id, device.label);
+    if (device.securityState === 'anomaly' && !trustedIds.has(device.id)) {
+      anomalyIds.add(device.id);
+    }
   }
 };
 
@@ -315,20 +320,26 @@ scanner.onDevices((devices: Device[]) => {
   const labeled = devices.map((device) => ({
     ...device,
     label: labelById.get(device.id) ?? device.label,
-    securityState: trustedIds.has(device.id) ? 'trusted' : null,
+    securityState: trustedIds.has(device.id) ? 'trusted' : anomalyIds.has(device.id) ? 'anomaly' : null,
   }));
-  db.syncDevices(labeled as Device[]);
 
   const now = Date.now();
   for (const device of labeled as Device[]) {
     if (device.status !== 'online') continue;
     if (baselineDeviceIds.has(device.id)) continue;
+    const isTrusted = trustedIds.has(device.id);
+    if (!isTrusted) {
+      anomalyIds.add(device.id);
+      device.securityState = 'anomaly';
+    }
     const lastSummaryAt = lastSummaryAtById.get(device.id) ?? 0;
     if (now - lastSummaryAt < aiSummaryCooldownMs) continue;
     lastSummaryAtById.set(device.id, now);
     baselineDeviceIds.add(device.id);
     aiQueue.push(device);
   }
+
+  db.syncDevices(labeled as Device[]);
   void processAiQueue();
 });
 
@@ -493,7 +504,14 @@ const server = createServer(async (request, response) => {
 
     if (request.method === 'POST' && url.pathname === '/api/settings/trust-device') {
       const body = await parseJsonBody(request);
-      writeJson(response, 200, settings.setDeviceTrusted(String(body.deviceId ?? ''), Boolean(body.trusted)));
+      const deviceId = String(body.deviceId ?? '');
+      const trusted = Boolean(body.trusted);
+      if (trusted) {
+        anomalyIds.delete(deviceId);
+      } else {
+        anomalyIds.add(deviceId);
+      }
+      writeJson(response, 200, settings.setDeviceTrusted(deviceId, trusted));
       return;
     }
 

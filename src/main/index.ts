@@ -15,6 +15,7 @@ let db: ReturnType<typeof createDatabase> | null = null;
 let settings: ReturnType<typeof createSettingsStore> | null = null;
 let ai: ReturnType<typeof createAiClient> | null = null;
 const baselineDeviceIds = new Set<string>();
+const anomalyIds = new Set<string>();
 const lastStatusById = new Map<string, Device['status']>();
 const lastSummaryAtById = new Map<string, number>();
 const lastSeenById = new Map<string, number>();
@@ -314,10 +315,11 @@ const createMainWindow = () => {
     const trustedIds = new Set(securityPrefs?.trustedDeviceIds ?? []);
     const labeledDevices = (devices as Device[]).map((device) => {
       const label = labelById.get(device.id);
+      const isTrusted = trustedIds.has(device.id);
       return {
         ...device,
         label: label ?? device.label,
-        securityState: trustedIds.has(device.id) ? 'trusted' : null,
+        securityState: isTrusted ? 'trusted' : anomalyIds.has(device.id) ? 'anomaly' : null,
       };
     });
 
@@ -350,6 +352,7 @@ const createMainWindow = () => {
       const isTrusted = trustedIds.has(device.id);
 
       if (isNew && !isTrusted) {
+        anomalyIds.add(device.id);
         device.securityState = 'anomaly';
         if (now - lastSecurityAlertAt >= securityAlertCooldownMs) {
           lastSecurityAlertAtById.set(device.id, now);
@@ -492,9 +495,14 @@ app.whenReady().then(async () => {
   ipcMain.handle('settings:mute-device', (_event, deviceId: string, muted: boolean) =>
     settings?.setDeviceMuted(deviceId, muted) ?? null
   );
-  ipcMain.handle('settings:trust-device', (_event, deviceId: string, trusted: boolean) =>
-    settings?.setDeviceTrusted(deviceId, trusted) ?? null
-  );
+  ipcMain.handle('settings:trust-device', (_event, deviceId: string, trusted: boolean) => {
+    if (trusted) {
+      anomalyIds.delete(deviceId);
+    } else {
+      anomalyIds.add(deviceId);
+    }
+    return settings?.setDeviceTrusted(deviceId, trusted) ?? null;
+  });
   ipcMain.handle(
     'settings:integration',
     (_event, patch: { apiEnabled?: boolean; apiPort?: number }) => {
@@ -545,10 +553,14 @@ app.whenReady().then(async () => {
 
   const seedKnownDevices = () => {
     const existing = db?.listDevices() ?? [];
+    const trustedIds = new Set(settings?.getSecurity().trustedDeviceIds ?? []);
     for (const device of existing as Device[]) {
       baselineDeviceIds.add(device.id);
       if (device.label) {
         labelById.set(device.id, device.label);
+      }
+      if (device.securityState === 'anomaly' && !trustedIds.has(device.id)) {
+        anomalyIds.add(device.id);
       }
     }
   };
