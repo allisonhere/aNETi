@@ -1,6 +1,8 @@
 # AnetI
 
-AnetI is an Electron desktop app for realtime LAN discovery and device intelligence.
+Continuous LAN discovery with real-time device intelligence, alerting, and SNMP-based enrichment.
+
+![AnetI Dashboard](screenshot.png)
 
 It continuously scans your local network, tracks device history, surfaces anomalies, and provides optional AI-generated summaries.
 
