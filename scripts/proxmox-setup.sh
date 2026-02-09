@@ -365,8 +365,11 @@ CREDEOF
   fi
 
   # Push this script into the CT and run it in install-only mode
-  SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
-  if [ -f "$SELF" ]; then
+  SELF=""
+  if [ -n "${BASH_SOURCE[0]:-}" ]; then
+    SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+  fi
+  if [ -n "$SELF" ] && [ -f "$SELF" ]; then
     echo "[aneti] Pushing setup script into CT..."
     pct push "$VMID" "$SELF" /tmp/proxmox-setup.sh --perms 755
     pct exec "$VMID" -- bash -lc "bash /tmp/proxmox-setup.sh ${INSTALL_ARGS}"
