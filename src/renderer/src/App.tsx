@@ -6,10 +6,14 @@ import {
   CircleCheck,
   ChevronDown,
   ChevronUp,
+  Copy,
+  Download,
   KeyRound,
   Palette,
   Radar,
+  RefreshCw,
   Router,
+  Server,
   Settings,
   ShieldAlert,
   ShieldCheck,
@@ -548,12 +552,69 @@ export default function App() {
     anomalies: true,
     latency: true,
   });
+  const [systemInfo, setSystemInfo] = useState<{
+    version: string;
+    deploymentMode: 'docker' | 'bare-metal';
+    nodeVersion: string;
+    uptime: number;
+  } | null>(null);
+  const [updateCheck, setUpdateCheck] = useState<{
+    currentVersion: string;
+    latestVersion: string;
+    updateAvailable: boolean;
+    latestCommitSha: string;
+  } | null>(null);
+  const [checkingForUpdate, setCheckingForUpdate] = useState(false);
+  const [updatingSystem, setUpdatingSystem] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState<{
+    state: 'idle' | 'in_progress' | 'completed' | 'failed';
+    step: string;
+    stepIndex: number;
+    totalSteps: number;
+    startedAt: number;
+    error: string | null;
+  } | null>(null);
   const { toasts, showToast, dismissToast } = useToast();
   const knownIds = useRef(new Set<string>());
   const hydratedFromDb = useRef(false);
   const hasScanResult = useRef(false);
   const initialScanHandled = useRef(false);
   const statusById = useRef(new Map<string, Device['status']>());
+
+  useEffect(() => {
+    if (view !== 'settings' || !window.aneti?.systemInfo) return;
+    let cancelled = false;
+    window.aneti.systemInfo().then((data) => {
+      if (!cancelled && data) setSystemInfo(data as typeof systemInfo);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [view]);
+
+  useEffect(() => {
+    if (!updatingSystem || !window.aneti?.updateStatus) return;
+    let active = true;
+    const poll = async () => {
+      if (!active) return;
+      try {
+        const status = (await window.aneti!.updateStatus()) as typeof updateStatus;
+        if (!active || !status) return;
+        setUpdateStatus(status);
+        if (status.state === 'completed') {
+          setUpdatingSystem(false);
+          showToast('Update complete! Reloading...', 'success');
+          setTimeout(() => location.reload(), 1500);
+        } else if (status.state === 'failed') {
+          setUpdatingSystem(false);
+          showToast(`Update failed: ${status.error ?? 'unknown error'}`, 'error');
+        }
+      } catch {
+        // Server might be restarting — keep polling
+      }
+    };
+    const timer = setInterval(poll, 2000);
+    poll();
+    return () => { active = false; clearInterval(timer); };
+  }, [updatingSystem]);
 
   useEffect(() => {
     let unsubscribe: (() => void) | undefined;
@@ -1213,8 +1274,8 @@ export default function App() {
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_30%,rgba(59,130,246,0.2),transparent_55%)]" />
 
       <div className="relative z-10 px-8 py-8">
-        <header className="flex items-center justify-between gap-6">
-          <div>
+        <header className="header-bar">
+          <div className="header-info">
             <div className="flex items-center gap-3">
               <div className="rounded-2xl bg-white/10 p-3 shadow-[0_0_20px_rgba(37,99,235,0.4)]">
                 <img
@@ -1240,27 +1301,26 @@ export default function App() {
             </p>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="header-actions">
             {view === 'dashboard' && (
               <button
                 type="button"
                 onClick={handleToggleScan}
                 className={cn(
-                  'rounded-full px-4 py-2 text-sm font-medium transition',
-                  scanning
-                    ? 'bg-emerald-400/20 text-emerald-200 hover:bg-emerald-400/30'
-                    : 'bg-white/10 text-white/80 hover:bg-white/20'
+                  scanning ? 'primary-button' : 'ghost-button'
                 )}
               >
+                <Zap className="mr-2 inline-block h-4 w-4" />
                 {scanning ? 'Pause Scan' : 'Resume Scan'}
               </button>
             )}
             <button
               type="button"
               onClick={() => setView((current) => (current === 'dashboard' ? 'settings' : 'dashboard'))}
-              className="rounded-full bg-white/10 px-4 py-2 text-sm text-white/70 hover:bg-white/20"
+              className="ghost-button"
             >
-              {view === 'dashboard' ? 'Settings' : 'Back to Dashboard'}
+              <Settings className="mr-2 inline-block h-4 w-4" />
+              {view === 'dashboard' ? 'Settings' : 'Dashboard'}
             </button>
           </div>
         </header>
@@ -1836,6 +1896,150 @@ export default function App() {
 
         {view === 'settings' && (
           <section className="mt-8 grid grid-cols-1 gap-6">
+            <div className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur">
+              <div className="flex items-center gap-3">
+                <div className="rounded-2xl bg-white/10 p-3">
+                  <Server className="h-5 w-5 text-sky-300" />
+                </div>
+                <div>
+                  <div className="text-xs uppercase tracking-[0.3em] text-white/50">System</div>
+                  <h2 className="mt-2 text-lg font-semibold">Version &amp; updates</h2>
+                </div>
+              </div>
+
+              <div className="mt-4 grid grid-cols-2 gap-4 md:grid-cols-4 text-sm">
+                <div>
+                  <div className="text-white/50">Version</div>
+                  <div className="mt-1 font-mono">{systemInfo?.version ?? '—'}</div>
+                </div>
+                <div>
+                  <div className="text-white/50">Mode</div>
+                  <div className="mt-1 font-mono">{systemInfo?.deploymentMode ?? '—'}</div>
+                </div>
+                <div>
+                  <div className="text-white/50">Node</div>
+                  <div className="mt-1 font-mono">{systemInfo?.nodeVersion ?? '—'}</div>
+                </div>
+                <div>
+                  <div className="text-white/50">Uptime</div>
+                  <div className="mt-1 font-mono">
+                    {systemInfo ? `${Math.floor(systemInfo.uptime / 3600)}h ${Math.floor((systemInfo.uptime % 3600) / 60)}m` : '—'}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-5 flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  className="primary-button"
+                  disabled={checkingForUpdate}
+                  onClick={async () => {
+                    if (!window.aneti?.updateCheck) return;
+                    setCheckingForUpdate(true);
+                    try {
+                      const result = (await window.aneti.updateCheck()) as typeof updateCheck;
+                      setUpdateCheck(result);
+                      if (result && !result.updateAvailable) {
+                        showToast('You are running the latest version', 'success');
+                      }
+                    } catch {
+                      showToast('Failed to check for updates', 'error');
+                    } finally {
+                      setCheckingForUpdate(false);
+                    }
+                  }}
+                >
+                  <RefreshCw className={cn('mr-2 inline-block h-4 w-4', checkingForUpdate && 'animate-spin')} />
+                  {checkingForUpdate ? 'Checking…' : 'Check for updates'}
+                </button>
+
+                {updateCheck?.updateAvailable && (
+                  <span className="text-sm text-emerald-300">
+                    Update available: <span className="font-mono">{updateCheck.latestVersion}</span>
+                    <span className="ml-1 text-white/40 font-mono text-xs">
+                      ({updateCheck.latestCommitSha.slice(0, 7)})
+                    </span>
+                  </span>
+                )}
+              </div>
+
+              {updateCheck?.updateAvailable && systemInfo?.deploymentMode === 'bare-metal' && (
+                <div className="mt-4">
+                  {!updatingSystem && !updateStatus?.state?.match(/in_progress/) && (
+                    <button
+                      type="button"
+                      className="primary-button"
+                      onClick={async () => {
+                        if (!window.aneti?.updateStart) return;
+                        setUpdatingSystem(true);
+                        setUpdateStatus(null);
+                        try {
+                          const result = (await window.aneti.updateStart()) as { ok: boolean; error?: string };
+                          if (!result?.ok) {
+                            showToast(`Update failed: ${result?.error ?? 'unknown error'}`, 'error');
+                            setUpdatingSystem(false);
+                          }
+                        } catch {
+                          showToast('Failed to start update', 'error');
+                          setUpdatingSystem(false);
+                        }
+                      }}
+                    >
+                      <Download className="mr-2 inline-block h-4 w-4" />
+                      Update now
+                    </button>
+                  )}
+
+                  {updatingSystem && updateStatus && updateStatus.state === 'in_progress' && (
+                    <div className="space-y-2">
+                      <div className="text-sm text-white/70">
+                        Updating: <span className="font-mono text-sky-300">{updateStatus.step}</span>
+                        <span className="ml-2 text-white/40">
+                          ({updateStatus.stepIndex}/{updateStatus.totalSteps})
+                        </span>
+                      </div>
+                      <div className="h-2 w-full overflow-hidden rounded-full bg-white/10">
+                        <div
+                          className="h-full rounded-full bg-sky-400 transition-all duration-500"
+                          style={{ width: `${(updateStatus.stepIndex / updateStatus.totalSteps) * 100}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {updatingSystem && (!updateStatus || updateStatus.state === 'in_progress') && updateStatus?.step === 'done' && (
+                    <div className="text-sm text-amber-300">Restarting service…</div>
+                  )}
+                </div>
+              )}
+
+              {updateCheck?.updateAvailable && systemInfo?.deploymentMode === 'docker' && (
+                <div className="mt-4 space-y-3">
+                  <p className="text-sm text-white/60">
+                    Self-update is not available in Docker mode. Run this command on your host to update:
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <code className="flex-1 rounded-xl bg-black/40 px-4 py-2 font-mono text-sm text-emerald-300 select-all overflow-hidden" style={{ overflowX: 'auto' }}>
+                      docker compose pull &amp;&amp; docker compose up -d
+                    </code>
+                    <button
+                      type="button"
+                      className="ghost-button"
+                      onClick={() => {
+                        window.aneti?.copyText('docker compose pull && docker compose up -d');
+                        showToast('Copied to clipboard', 'success');
+                      }}
+                    >
+                      <Copy className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <p className="text-xs text-white/40">
+                    Tip: use <a href="https://containrrr.dev/watchtower/" target="_blank" rel="noopener noreferrer" className="underline hover:text-white/60">Watchtower</a> for automatic Docker image updates.
+                  </p>
+                </div>
+              )}
+            </div>
+
             <div className="rounded-3xl border border-white/10 bg-white/5 p-6 backdrop-blur">
               <div className="flex items-center gap-3">
                 <div className="rounded-2xl bg-white/10 p-3">

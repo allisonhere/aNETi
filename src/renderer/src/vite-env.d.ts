@@ -38,6 +38,11 @@ declare global {
       settingsApiToken: () => Promise<unknown>;
       settingsRotateApiToken: () => Promise<unknown>;
       settingsTestNotification: () => Promise<unknown>;
+      wakeDevice: (mac: string) => Promise<unknown>;
+      systemInfo: () => Promise<unknown>;
+      updateCheck: () => Promise<unknown>;
+      updateStart: () => Promise<unknown>;
+      updateStatus: () => Promise<unknown>;
       copyText: (value: string) => void;
     };
   }

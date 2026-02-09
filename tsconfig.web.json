@@ -14,6 +14,8 @@
     "src/main/scanner.ts",
     "src/main/db.ts",
     "src/main/settings.ts",
-    "src/main/types.ts"
+    "src/main/types.ts",
+    "src/main/ai.ts",
+    "src/main/updater.ts"
   ]
 }

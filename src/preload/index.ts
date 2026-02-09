@@ -56,5 +56,9 @@ contextBridge.exposeInMainWorld('aneti', {
   settingsRotateApiToken: () => ipcRenderer.invoke('settings:api-token:rotate'),
   settingsTestNotification: () => ipcRenderer.invoke('settings:test-notification'),
   wakeDevice: (mac: string) => ipcRenderer.invoke('device:wake', mac),
+  systemInfo: () => ipcRenderer.invoke('system:info'),
+  updateCheck: () => ipcRenderer.invoke('system:update-check'),
+  updateStart: () => ipcRenderer.invoke('system:update'),
+  updateStatus: () => ipcRenderer.invoke('system:update-status'),
   copyText: (value: string) => clipboard.writeText(String(value ?? '')),
 });

@@ -6,6 +6,14 @@ import { createScanner, sendWakeOnLan } from './scanner.js';
 import { createDatabase } from './db.js';
 import { createSettingsStore } from './settings.js';
 import { createAiClient } from './ai.js';
+import {
+  detectDeploymentMode,
+  getCurrentVersion,
+  checkForUpdate,
+  getUpdateStatus,
+  clearStaleStatus,
+  performUpdate,
+} from './updater.js';
 import type { Device } from './types.js';
 
 const env = process.env;
@@ -19,6 +27,7 @@ const rendererDir = env.ANETI_RENDERER_DIR ?? join(process.cwd(), 'dist/renderer
 const disableAuth = env.ANETI_WEB_DISABLE_AUTH === '1';
 
 mkdirSync(dataDir, { recursive: true });
+clearStaleStatus(dataDir);
 
 const db = await createDatabase(join(dataDir, 'aneti.sqlite'));
 const settings = createSettingsStore(join(dataDir, 'settings.json'));
@@ -133,13 +142,15 @@ const buildStatsPayload = () => {
   };
 };
 
+let aiRetryTimer: ReturnType<typeof setTimeout> | null = null;
+
 const processAiQueue = async () => {
   if (aiWorking) return;
   aiWorking = true;
   try {
     while (aiQueue.length > 0) {
-      const device = aiQueue.shift();
-      if (!device) continue;
+      const device = aiQueue[0];
+      if (!device) { aiQueue.shift(); continue; }
       const snapshot = scanner.list();
       const onlineDevices = snapshot.filter((item) => item.status === 'online').length;
       const totalDevices = snapshot.length;
@@ -152,7 +163,21 @@ const processAiQueue = async () => {
         detectedAt,
       });
 
-      if (!summary) continue;
+      if (!summary) {
+        // If no provider available (all backed off), stop and retry later
+        if (!ai.hasAvailableProvider()) {
+          if (!aiRetryTimer) {
+            aiRetryTimer = setTimeout(() => {
+              aiRetryTimer = null;
+              void processAiQueue();
+            }, 30_000);
+          }
+          break;
+        }
+        aiQueue.shift();
+        continue;
+      }
+      aiQueue.shift();
       const createdAt = Date.now();
       db.addAlert({
         type: 'ai_summary',
@@ -264,6 +289,10 @@ const bridgeScript = () => `(() => {
     settingsRotateApiToken: () => req('POST', '/api/settings/api-token/rotate', {}),
     settingsTestNotification: async () => ({ ok: false, reason: 'unsupported_in_web_mode' }),
     wakeDevice: (mac) => req('POST', '/api/device/wake', { mac }),
+    systemInfo: () => req('GET', '/api/system/info'),
+    updateCheck: () => req('GET', '/api/system/update-check'),
+    updateStart: () => req('POST', '/api/system/update', {}),
+    updateStatus: () => req('GET', '/api/system/update-status'),
     copyText: (value) => navigator.clipboard?.writeText(String(value || '')).catch(() => {}),
   };
 })();`;
@@ -470,6 +499,37 @@ const server = createServer(async (request, response) => {
       const mac = String(body?.mac ?? '');
       const result = await sendWakeOnLan(mac);
       writeJson(response, 200, result);
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/system/info') {
+      writeJson(response, 200, {
+        version: getCurrentVersion(),
+        deploymentMode: detectDeploymentMode(),
+        nodeVersion: process.version,
+        uptime: process.uptime(),
+      });
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/system/update-check') {
+      try {
+        const result = await checkForUpdate();
+        writeJson(response, 200, result);
+      } catch (err) {
+        writeJson(response, 502, { ok: false, error: String((err as Error).message ?? err) });
+      }
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/system/update') {
+      const result = performUpdate(process.cwd(), dataDir);
+      writeJson(response, result.ok ? 200 : 400, result);
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/system/update-status') {
+      writeJson(response, 200, getUpdateStatus(dataDir));
       return;
     }
 

@@ -439,11 +439,6 @@ APT_PKGS=(
   ca-certificates
   curl
   git
-  build-essential
-  python3
-  make
-  g++
-  pkg-config
   iputils-ping
   iproute2
   net-tools

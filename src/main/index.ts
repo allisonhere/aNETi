@@ -194,14 +194,16 @@ const startIntegrationServer = async () => {
   console.log(`Integration API listening at http://127.0.0.1:${config.apiPort}`);
 };
 
+let aiRetryTimer: ReturnType<typeof setTimeout> | null = null;
+
 const processAiQueue = async () => {
   if (aiWorking || !ai) return;
   aiWorking = true;
 
   try {
     while (aiQueue.length > 0) {
-      const device = aiQueue.shift();
-      if (!device) continue;
+      const device = aiQueue[0];
+      if (!device) { aiQueue.shift(); continue; }
       const snapshot = scanner.list();
       const onlineDevices = snapshot.filter((item) => item.status === 'online').length;
       const totalDevices = snapshot.length;
@@ -214,7 +216,20 @@ const processAiQueue = async () => {
         detectedAt,
       });
 
-      if (!summary) continue;
+      if (!summary) {
+        if (!ai.hasAvailableProvider()) {
+          if (!aiRetryTimer) {
+            aiRetryTimer = setTimeout(() => {
+              aiRetryTimer = null;
+              void processAiQueue();
+            }, 30_000);
+          }
+          break;
+        }
+        aiQueue.shift();
+        continue;
+      }
+      aiQueue.shift();
       const createdAt = Date.now();
       db?.addAlert({
         type: 'ai_summary',
@@ -525,6 +540,11 @@ app.whenReady().then(async () => {
     const token = settings.rotateApiToken();
     return { token };
   });
+  ipcMain.handle('system:info', () => ({ ok: false, error: 'unsupported' }));
+  ipcMain.handle('system:update-check', () => ({ ok: false, error: 'unsupported' }));
+  ipcMain.handle('system:update', () => ({ ok: false, error: 'unsupported' }));
+  ipcMain.handle('system:update-status', () => ({ ok: false, error: 'unsupported' }));
+
   ipcMain.handle('settings:test-notification', () => {
     if (!Notification.isSupported()) {
       return { ok: false, reason: 'unsupported' };

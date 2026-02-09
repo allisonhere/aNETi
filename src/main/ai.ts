@@ -203,18 +203,46 @@ const claudeSummary = async (apiKey: string, input: SummaryInput, config: Provid
 
 const sanitizeSummary = (value: string) => value.replace(/\s+/g, ' ').trim().slice(0, 600);
 
+const isRateLimitError = (error: unknown): boolean => {
+  const msg = String(error instanceof Error ? error.message : error).toLowerCase();
+  return msg.includes('quota') || msg.includes('rate') || msg.includes('429') || msg.includes('too many');
+};
+
+const parseRetryDelay = (error: unknown): number => {
+  const msg = String(error instanceof Error ? error.message : error);
+  const match = msg.match(/retry in (\d+(?:\.\d+)?)\s*s/i);
+  if (match) return Math.ceil(Number(match[1]) * 1000);
+  return 0;
+};
+
 export const createAiClient = (
   getKey: (provider: ProviderId) => string | undefined,
   config: ProviderConfig = defaultConfig
 ) => {
   const providerOrder: ProviderId[] = ['openai', 'gemini', 'claude'];
+  const backoffUntil = new Map<ProviderId, number>();
+  const consecutiveFailures = new Map<ProviderId, number>();
 
   const selectProvider = (): ProviderId | null => {
+    const now = Date.now();
     for (const provider of providerOrder) {
       const key = getKey(provider);
-      if (key && key.trim()) return provider;
+      if (!key || !key.trim()) continue;
+      const until = backoffUntil.get(provider) ?? 0;
+      if (now < until) continue;
+      return provider;
     }
     return null;
+  };
+
+  const markRateLimited = (provider: ProviderId, error: unknown) => {
+    const failures = (consecutiveFailures.get(provider) ?? 0) + 1;
+    consecutiveFailures.set(provider, failures);
+    const hintMs = parseRetryDelay(error);
+    const expMs = Math.min(60_000 * Math.pow(2, failures - 1), 300_000);
+    const delayMs = Math.max(hintMs, expMs);
+    backoffUntil.set(provider, Date.now() + delayMs);
+    console.warn(`[ai] ${provider} rate-limited, backing off ${Math.round(delayMs / 1000)}s (attempt ${failures})`);
   };
 
   const summarizeNewDevice = async (input: SummaryInput): Promise<AiSummary | null> => {
@@ -233,18 +261,26 @@ export const createAiClient = (
         result = await claudeSummary(apiKey, input, config.claude);
       }
 
+      consecutiveFailures.set(provider, 0);
       return {
         provider,
         model: result.model,
         text: sanitizeSummary(result.text),
       };
     } catch (error) {
-      console.warn(`[ai] ${provider} summary failed`, error);
+      if (isRateLimitError(error)) {
+        markRateLimited(provider, error);
+      } else {
+        console.warn(`[ai] ${provider} summary failed`, error);
+      }
       return null;
     }
   };
 
+  const hasAvailableProvider = (): boolean => selectProvider() !== null;
+
   return {
     summarizeNewDevice,
+    hasAvailableProvider,
   };
 };
