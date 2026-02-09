@@ -3,7 +3,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { join } from 'node:path';
-import { createScanner } from './scanner';
+import { createScanner, sendWakeOnLan } from './scanner';
 import { createDatabase } from './db';
 import { createSettingsStore, type ProviderId } from './settings';
 import { createAiClient } from './ai';
@@ -418,9 +418,9 @@ const createMainWindow = () => {
   });
 };
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   const dbPath = join(app.getPath('userData'), 'aneti.sqlite');
-  db = createDatabase(dbPath);
+  db = await createDatabase(dbPath);
   settings = createSettingsStore(join(app.getPath('userData'), 'settings.json'));
   ai = createAiClient((provider) => settings?.getSecret(provider));
   settings.ensureApiToken();
@@ -445,6 +445,7 @@ app.whenReady().then(() => {
   });
   ipcMain.handle('scanner:list', () => scanner.list());
   ipcMain.handle('scanner:diagnostics', (_event, options) => scanner.diagnostics(options));
+  ipcMain.handle('device:wake', (_event, mac: string) => sendWakeOnLan(mac));
   ipcMain.handle('db:devices', () => db?.listDevices() ?? []);
   ipcMain.handle('db:alerts', (_event, limit?: number) => db?.listAlerts(limit ?? 50) ?? []);
   ipcMain.handle('db:sightings', (_event, deviceId: string, limit?: number) =>

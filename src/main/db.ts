@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { createRequire } from 'node:module';
 
@@ -14,6 +14,7 @@ export type DeviceRecord = {
   lastSeen: number;
   status: 'online' | 'offline';
   latencyMs?: number | null;
+  openPorts?: number[];
 };
 
 export type AlertRecord = {
@@ -44,7 +45,8 @@ const createMemoryDatabase = () => {
       const existing = deviceMap.get(device.id);
       const label = device.label ?? existing?.label;
       const mdnsName = device.mdnsName ?? existing?.mdnsName;
-      deviceMap.set(device.id, { ...existing, ...device, label, mdnsName });
+      const openPorts = device.openPorts ?? existing?.openPorts;
+      deviceMap.set(device.id, { ...existing, ...device, label, mdnsName, openPorts });
       sightings.unshift({
         id: sightingId++,
         deviceId: device.id,
@@ -85,32 +87,56 @@ const createMemoryDatabase = () => {
   };
 };
 
-export const createDatabase = (dbPath: string) => {
+export const createDatabase = async (dbPath: string) => {
   const require = createRequire(import.meta.url);
-  let Sqlite: any = null;
+  let initSqlJs: any = null;
 
   try {
-    Sqlite = require('better-sqlite3');
+    initSqlJs = require('sql.js');
   } catch (error) {
-    console.warn('better-sqlite3 not available, using in-memory store.', error);
+    console.warn('sql.js not available, using in-memory store.', error);
   }
 
-  if (!Sqlite) {
+  if (!initSqlJs) {
     return createMemoryDatabase();
   }
 
-  let db: any = null;
+  let SQL: any;
+  try {
+    const wasmPath = require.resolve('sql.js/dist/sql-wasm.wasm');
+    SQL = await initSqlJs({ locateFile: () => wasmPath });
+  } catch (error) {
+    console.warn('sql.js WASM init failed, using in-memory store.', error);
+    return createMemoryDatabase();
+  }
+
+  let db: any;
   try {
     mkdirSync(dirname(dbPath), { recursive: true });
-    db = new Sqlite(dbPath);
+    if (existsSync(dbPath)) {
+      const buffer = readFileSync(dbPath);
+      db = new SQL.Database(buffer);
+    } else {
+      db = new SQL.Database();
+    }
   } catch (error) {
-    console.warn('better-sqlite3 failed to load, using in-memory store.', error);
+    console.warn('sql.js failed to open database, using in-memory store.', error);
     return createMemoryDatabase();
   }
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
 
-  db.exec(`
+  db.run('PRAGMA journal_mode = WAL;');
+  db.run('PRAGMA foreign_keys = ON;');
+
+  const saveToDisk = () => {
+    try {
+      const data = db.export();
+      writeFileSync(dbPath, Buffer.from(data));
+    } catch (error) {
+      console.error('Failed to save database to disk:', error);
+    }
+  };
+
+  db.run(`
     CREATE TABLE IF NOT EXISTS devices (
       id TEXT PRIMARY KEY,
       ip TEXT NOT NULL,
@@ -124,7 +150,9 @@ export const createDatabase = (dbPath: string) => {
       status TEXT NOT NULL,
       latency_ms INTEGER
     );
+  `);
 
+  db.run(`
     CREATE TABLE IF NOT EXISTS sightings (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       device_id TEXT NOT NULL,
@@ -134,7 +162,9 @@ export const createDatabase = (dbPath: string) => {
       status TEXT,
       FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
     );
+  `);
 
+  db.run(`
     CREATE TABLE IF NOT EXISTS alerts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       type TEXT NOT NULL,
@@ -144,129 +174,149 @@ export const createDatabase = (dbPath: string) => {
       acknowledged_at INTEGER,
       FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE SET NULL
     );
-
-    CREATE INDEX IF NOT EXISTS idx_sightings_device ON sightings(device_id);
-    CREATE INDEX IF NOT EXISTS idx_sightings_seen_at ON sightings(seen_at);
-    CREATE INDEX IF NOT EXISTS idx_alerts_created_at ON alerts(created_at);
   `);
 
+  db.run('CREATE INDEX IF NOT EXISTS idx_sightings_device ON sightings(device_id);');
+  db.run('CREATE INDEX IF NOT EXISTS idx_sightings_seen_at ON sightings(seen_at);');
+  db.run('CREATE INDEX IF NOT EXISTS idx_alerts_created_at ON alerts(created_at);');
+
   const ensureColumn = (table: string, name: string, type: string) => {
-    const columns = db.prepare(`PRAGMA table_info('${table}');`).all() as Array<{ name: string }>;
-    if (!columns.some((column) => column.name === name)) {
-      db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type};`);
+    const result = db.exec(`PRAGMA table_info('${table}');`);
+    const columns: string[] = result.length > 0
+      ? result[0].values.map((row: any[]) => row[1])
+      : [];
+    if (!columns.includes(name)) {
+      db.run(`ALTER TABLE ${table} ADD COLUMN ${name} ${type};`);
     }
   };
 
   ensureColumn('devices', 'label', 'TEXT');
   ensureColumn('devices', 'mdns_name', 'TEXT');
+  ensureColumn('devices', 'open_ports', 'TEXT');
   ensureColumn('sightings', 'status', 'TEXT');
 
-  const upsertDeviceStmt = db.prepare(`
-    INSERT INTO devices (
-      id, ip, mac, hostname, vendor, mdns_name, label, first_seen, last_seen, status, latency_ms
-    ) VALUES (
-      @id, @ip, @mac, @hostname, @vendor, @mdnsName, @label, @firstSeen, @lastSeen, @status, @latencyMs
-    )
-    ON CONFLICT(id) DO UPDATE SET
-      ip = excluded.ip,
-      mac = excluded.mac,
-      hostname = excluded.hostname,
-      vendor = excluded.vendor,
-      mdns_name = COALESCE(excluded.mdns_name, devices.mdns_name),
-      label = COALESCE(excluded.label, devices.label),
-      last_seen = excluded.last_seen,
-      status = excluded.status,
-      latency_ms = excluded.latency_ms;
-  `);
-
-  const insertSightingStmt = db.prepare(`
-    INSERT INTO sightings (device_id, seen_at, ip, latency_ms, status)
-    VALUES (@deviceId, @seenAt, @ip, @latencyMs, @status);
-  `);
-
-  const insertAlertStmt = db.prepare(`
-    INSERT INTO alerts (type, message, device_id, created_at, acknowledged_at)
-    VALUES (@type, @message, @deviceId, @createdAt, @acknowledgedAt);
-  `);
-
-  const listDevicesStmt = db.prepare(`
-    SELECT id, ip, mac, hostname, vendor, mdns_name as mdnsName, label, first_seen as firstSeen, last_seen as lastSeen, status, latency_ms as latencyMs
-    FROM devices
-    ORDER BY last_seen DESC;
-  `);
-
-  const listSightingsStmt = db.prepare(`
-    SELECT id, device_id as deviceId, seen_at as seenAt, ip, latency_ms as latencyMs, status
-    FROM sightings
-    WHERE device_id = ?
-    ORDER BY seen_at DESC
-    LIMIT ?;
-  `);
-
-  const listAlertsStmt = db.prepare(`
-    SELECT id, type, message, device_id as deviceId, created_at as createdAt, acknowledged_at as acknowledgedAt
-    FROM alerts
-    ORDER BY created_at DESC
-    LIMIT ?;
-  `);
+  saveToDisk();
 
   const syncDevices = (devices: DeviceRecord[]) => {
     const now = Date.now();
-    const tx = db.transaction((items: DeviceRecord[]) => {
-      for (const device of items) {
-        upsertDeviceStmt.run({
-          id: device.id,
-          ip: device.ip,
-          mac: device.mac ?? null,
-          hostname: device.hostname ?? null,
-          vendor: device.vendor ?? null,
-          mdnsName: device.mdnsName ?? null,
-          label: device.label ?? null,
-          firstSeen: device.firstSeen ?? now,
-          lastSeen: device.lastSeen ?? now,
-          status: device.status,
-          latencyMs: device.latencyMs ?? null,
-        });
+    db.run('BEGIN TRANSACTION;');
+    try {
+      for (const device of devices) {
+        db.run(
+          `INSERT INTO devices (
+            id, ip, mac, hostname, vendor, mdns_name, label, first_seen, last_seen, status, latency_ms, open_ports
+          ) VALUES (
+            $id, $ip, $mac, $hostname, $vendor, $mdnsName, $label, $firstSeen, $lastSeen, $status, $latencyMs, $openPorts
+          )
+          ON CONFLICT(id) DO UPDATE SET
+            ip = excluded.ip,
+            mac = excluded.mac,
+            hostname = excluded.hostname,
+            vendor = excluded.vendor,
+            mdns_name = COALESCE(excluded.mdns_name, devices.mdns_name),
+            label = COALESCE(excluded.label, devices.label),
+            last_seen = excluded.last_seen,
+            status = excluded.status,
+            latency_ms = excluded.latency_ms,
+            open_ports = COALESCE(excluded.open_ports, devices.open_ports);`,
+          {
+            $id: device.id,
+            $ip: device.ip,
+            $mac: device.mac ?? null,
+            $hostname: device.hostname ?? null,
+            $vendor: device.vendor ?? null,
+            $mdnsName: device.mdnsName ?? null,
+            $label: device.label ?? null,
+            $firstSeen: device.firstSeen ?? now,
+            $lastSeen: device.lastSeen ?? now,
+            $status: device.status,
+            $latencyMs: device.latencyMs ?? null,
+            $openPorts: device.openPorts ? JSON.stringify(device.openPorts) : null,
+          }
+        );
 
-        insertSightingStmt.run({
-          deviceId: device.id,
-          seenAt: device.lastSeen ?? now,
-          ip: device.ip,
-          latencyMs: device.latencyMs ?? null,
-          status: device.status,
-        });
+        db.run(
+          `INSERT INTO sightings (device_id, seen_at, ip, latency_ms, status)
+          VALUES ($deviceId, $seenAt, $ip, $latencyMs, $status);`,
+          {
+            $deviceId: device.id,
+            $seenAt: device.lastSeen ?? now,
+            $ip: device.ip,
+            $latencyMs: device.latencyMs ?? null,
+            $status: device.status,
+          }
+        );
       }
-    });
-
-    tx(devices);
+      db.run('COMMIT;');
+    } catch (error) {
+      db.run('ROLLBACK;');
+      throw error;
+    }
+    saveToDisk();
   };
 
-  const listDevices = (): DeviceRecord[] => listDevicesStmt.all();
+  const queryAll = (sql: string, params?: any): any[] => {
+    const stmt = db.prepare(sql);
+    if (params) stmt.bind(params);
+    const rows: any[] = [];
+    while (stmt.step()) {
+      rows.push(stmt.getAsObject());
+    }
+    stmt.free();
+    return rows;
+  };
+
+  const listDevices = (): DeviceRecord[] => {
+    const rows = queryAll(
+      `SELECT id, ip, mac, hostname, vendor, mdns_name as mdnsName, label,
+              first_seen as firstSeen, last_seen as lastSeen, status, latency_ms as latencyMs,
+              open_ports as openPortsJson
+       FROM devices ORDER BY last_seen DESC;`
+    );
+    return rows.map((row: any) => {
+      const { openPortsJson, ...rest } = row;
+      const openPorts = openPortsJson ? JSON.parse(openPortsJson) : undefined;
+      return { ...rest, openPorts };
+    });
+  };
 
   const listSightingsByDevice = (deviceId: string, limit = 50) =>
-    listSightingsStmt.all(deviceId, limit);
+    queryAll(
+      `SELECT id, device_id as deviceId, seen_at as seenAt, ip, latency_ms as latencyMs, status
+       FROM sightings WHERE device_id = $deviceId ORDER BY seen_at DESC LIMIT $limit;`,
+      { $deviceId: deviceId, $limit: limit }
+    );
 
   const addAlert = (alert: Omit<AlertRecord, 'id'>) => {
-    insertAlertStmt.run({
-      type: alert.type,
-      message: alert.message,
-      deviceId: alert.deviceId ?? null,
-      createdAt: alert.createdAt,
-      acknowledgedAt: alert.acknowledgedAt ?? null,
-    });
+    db.run(
+      `INSERT INTO alerts (type, message, device_id, created_at, acknowledged_at)
+       VALUES ($type, $message, $deviceId, $createdAt, $acknowledgedAt);`,
+      {
+        $type: alert.type,
+        $message: alert.message,
+        $deviceId: alert.deviceId ?? null,
+        $createdAt: alert.createdAt,
+        $acknowledgedAt: alert.acknowledgedAt ?? null,
+      }
+    );
+    saveToDisk();
   };
 
-  const listAlerts = (limit = 50): AlertRecord[] => listAlertsStmt.all(limit);
-
-  const updateDeviceLabelStmt = db.prepare(`
-    UPDATE devices
-    SET label = @label
-    WHERE id = @id;
-  `);
+  const listAlerts = (limit = 50): AlertRecord[] =>
+    queryAll(
+      `SELECT id, type, message, device_id as deviceId, created_at as createdAt,
+              acknowledged_at as acknowledgedAt
+       FROM alerts ORDER BY created_at DESC LIMIT $limit;`,
+      { $limit: limit }
+    );
 
   const updateDeviceLabel = (id: string, label: string | null) => {
     const normalized = label && label.trim().length > 0 ? label.trim() : null;
-    updateDeviceLabelStmt.run({ id, label: normalized });
+    db.run('UPDATE devices SET label = $label WHERE id = $id;', {
+      $id: id,
+      $label: normalized,
+    });
+    saveToDisk();
     return { id, label: normalized };
   };
 

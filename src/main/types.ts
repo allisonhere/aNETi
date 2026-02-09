@@ -13,4 +13,5 @@ export type Device = {
   lastSeen: number;
   status: DeviceStatus;
   latencyMs?: number;
+  openPorts?: number[];
 };

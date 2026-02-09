@@ -33,6 +33,7 @@ export type Device = {
   lastSeen: number;
   status: 'online' | 'offline';
   latencyMs?: number;
+  openPorts?: number[];
 };
 
 type Diagnostics = {
@@ -430,6 +431,7 @@ export default function App() {
   const [savingAlertPrefs, setSavingAlertPrefs] = useState(false);
   const [savingMutedDeviceId, setSavingMutedDeviceId] = useState<string | null>(null);
   const [savingTrustedDeviceId, setSavingTrustedDeviceId] = useState<string | null>(null);
+  const [wakingDeviceId, setWakingDeviceId] = useState<string | null>(null);
   const [sendingTestNotification, setSendingTestNotification] = useState(false);
   const [savingIntegration, setSavingIntegration] = useState(false);
   const [apiPortDraft, setApiPortDraft] = useState(8787);
@@ -957,6 +959,25 @@ export default function App() {
     setSavingTrustedDeviceId(null);
   };
 
+  const handleWakeDevice = async (deviceId: string, mac: string) => {
+    if (!window.aneti?.wakeDevice) {
+      showToast('error', 'Wake-on-LAN unavailable.');
+      return;
+    }
+    setWakingDeviceId(deviceId);
+    try {
+      const result = await window.aneti.wakeDevice(mac) as { ok: boolean; error?: string };
+      if (result?.ok) {
+        showToast('success', 'Wake-on-LAN packet sent.');
+      } else {
+        showToast('error', result?.error ?? 'Failed to send WoL packet.');
+      }
+    } catch {
+      showToast('error', 'Failed to send WoL packet.');
+    }
+    setWakingDeviceId(null);
+  };
+
   const handleTestNotification = async () => {
     if (!window.aneti?.settingsTestNotification) {
       showToast('error', 'Test notification unavailable.');
@@ -1205,11 +1226,7 @@ export default function App() {
             <section className="mt-8 grid grid-cols-1 gap-4 md:grid-cols-3">
               <StatCard label="Devices" value={`${devices.length}`} tone="info" />
               <StatCard label="Online" value={`${onlineCount}`} tone="good" />
-              <StatCard
-                label={anomalyCount > 0 ? 'Anomalies' : 'Offline'}
-                value={anomalyCount > 0 ? `${anomalyCount}` : `${offlineCount}`}
-                tone={anomalyCount > 0 ? 'warn' : 'warn'}
-              />
+              <StatCard label="Offline" value={`${offlineCount}`} tone="warn" />
             </section>
 
             <section className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-[1.2fr_1fr]">
@@ -1297,6 +1314,11 @@ export default function App() {
                               <div className={cn('device-tag', device.status === 'online' ? 'device-tag--ok' : 'device-tag--warn')}>
                                 {device.status}
                               </div>
+                              {device.openPorts && device.openPorts.length > 0 && (
+                                <div className="device-tag device-tag--latency">
+                                  {device.openPorts.length} {device.openPorts.length === 1 ? 'port' : 'ports'}
+                                </div>
+                              )}
                               {isTrusted && (
                                 <div className="device-tag device-tag--trusted">
                                   <CircleCheck className="device-tag__icon" />
@@ -1384,6 +1406,19 @@ export default function App() {
                                   title="Click to copy"
                                 >
                                   {device.vendor || 'Unknown'}
+                                </button>
+                              </div>
+                              <div className="detail-row">
+                                <div className="detail-label">Open Ports</div>
+                                <button
+                                  type="button"
+                                  onClick={() => copyText(device.openPorts?.join(', ') || '')}
+                                  className="detail-value detail-value--copy"
+                                  title="Click to copy"
+                                >
+                                  {device.openPorts && device.openPorts.length > 0
+                                    ? device.openPorts.join(', ')
+                                    : 'None detected'}
                                 </button>
                               </div>
                               <div className="detail-row">
@@ -1577,6 +1612,16 @@ export default function App() {
                                 >
                                   Copy device summary
                                 </button>
+                                {device.mac && (
+                                  <button
+                                    type="button"
+                                    className="detail-copy-button"
+                                    disabled={wakingDeviceId === device.id}
+                                    onClick={() => handleWakeDevice(device.id, device.mac!)}
+                                  >
+                                    {wakingDeviceId === device.id ? 'Sending…' : 'Wake device'}
+                                  </button>
+                                )}
                               </div>
                             </div>
                           )}

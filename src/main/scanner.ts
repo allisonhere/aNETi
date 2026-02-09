@@ -1,4 +1,6 @@
 import os from 'node:os';
+import net from 'node:net';
+import dgram from 'node:dgram';
 import dns from 'node:dns/promises';
 import { execFile } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
@@ -44,6 +46,7 @@ type ScannerDiagnostics = {
 type EnrichmentPlan = {
   hostnameLookups: Array<{ ip: string; id: string }>;
   vendorTargets: Map<string, string[]>;
+  portScanTargets: Array<{ ip: string; id: string }>;
 };
 
 type ScanResult = {
@@ -276,6 +279,27 @@ const resolveHostname = async (ip: string) => {
   return undefined;
 };
 
+const DEFAULT_PORTS = [21, 22, 23, 25, 53, 80, 110, 135, 139, 143, 443, 445, 993, 995, 3306, 3389, 5432, 5900, 8080, 8443];
+
+const tryConnect = (ip: string, port: number, timeoutMs: number): Promise<boolean> =>
+  new Promise((resolve) => {
+    const socket = new net.Socket();
+    socket.setTimeout(timeoutMs);
+    socket.once('connect', () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.once('timeout', () => {
+      socket.destroy();
+      resolve(false);
+    });
+    socket.once('error', () => {
+      socket.destroy();
+      resolve(false);
+    });
+    socket.connect(port, ip);
+  });
+
 const mapWithConcurrency = async <T, R>(items: T[], limit: number, worker: (item: T) => Promise<R>): Promise<R[]> => {
   const results: R[] = new Array(items.length);
   let index = 0;
@@ -291,6 +315,46 @@ const mapWithConcurrency = async <T, R>(items: T[], limit: number, worker: (item
 
   await Promise.all(runners);
   return results;
+};
+
+const scanPorts = async (ip: string, ports: number[] = DEFAULT_PORTS, timeoutMs = 300): Promise<number[]> => {
+  const results = await mapWithConcurrency(ports, 16, async (port) => {
+    const open = await tryConnect(ip, port, timeoutMs);
+    return open ? port : null;
+  });
+  return results.filter((port): port is number => port !== null);
+};
+
+export const sendWakeOnLan = async (mac: string): Promise<{ ok: boolean; error?: string }> => {
+  try {
+    const cleaned = mac.replace(/[^0-9a-fA-F]/g, '');
+    if (cleaned.length !== 12) {
+      return { ok: false, error: 'Invalid MAC address' };
+    }
+    const macBytes = Buffer.from(cleaned, 'hex');
+    const magic = Buffer.alloc(102);
+    magic.fill(0xff, 0, 6);
+    for (let i = 0; i < 16; i++) {
+      macBytes.copy(magic, 6 + i * 6);
+    }
+
+    const socket = dgram.createSocket('udp4');
+    await new Promise<void>((resolve, reject) => {
+      socket.once('error', reject);
+      socket.bind(0, () => {
+        socket.setBroadcast(true);
+        socket.send(magic, 0, magic.length, 9, '255.255.255.255', (err) => {
+          socket.close();
+          if (err) reject(err);
+          else resolve();
+        });
+      });
+    });
+
+    return { ok: true };
+  } catch (err: any) {
+    return { ok: false, error: err?.message ?? 'Unknown error' };
+  }
 };
 
 const deviceId = (ip: string, mac?: string) => (mac ? `mac:${mac}` : `ip:${ip}`);
@@ -342,6 +406,8 @@ const fetchVendor = async (prefix: string) => {
 export const createScanner = () => {
   let devices: Device[] = [];
   let timer: NodeJS.Timeout | null = null;
+  let arpWatchTimer: NodeJS.Timeout | null = null;
+  let lastKnownMacs = new Map<string, string>();
   let inFlight = false;
   const listeners = new Set<DevicesListener>();
   const hostnameCache = new Map<string, string>();
@@ -363,7 +429,7 @@ export const createScanner = () => {
       const update = updates.get(device.id);
       if (!update) return device;
       const updated = { ...device, ...update };
-      if (updated.hostname !== device.hostname || updated.vendor !== device.vendor) {
+      if (updated.hostname !== device.hostname || updated.vendor !== device.vendor || updated.openPorts !== device.openPorts) {
         changed = true;
       }
       return updated;
@@ -448,8 +514,58 @@ export const createScanner = () => {
     mdnsState = 'idle';
   };
 
+  const watchNeighborTable = async () => {
+    if (inFlight) return;
+    try {
+      const arpMap = await readNeighborTable();
+      const timestamp = now();
+      let changed = false;
+
+      for (const [ip, mac] of arpMap) {
+        const known = lastKnownMacs.get(ip);
+        if (known === mac) {
+          const existing = devices.find((d) => d.ip === ip || d.id === deviceId(ip, mac));
+          if (existing && existing.status === 'online') {
+            existing.lastSeen = timestamp;
+          }
+          continue;
+        }
+
+        const id = deviceId(ip, mac);
+        const existing = devices.find((d) => d.id === id);
+        if (existing) {
+          existing.lastSeen = timestamp;
+          changed = true;
+          continue;
+        }
+
+        devices.push({
+          id,
+          ip,
+          mac,
+          firstSeen: timestamp,
+          lastSeen: timestamp,
+          status: 'online',
+        });
+        changed = true;
+      }
+
+      lastKnownMacs = arpMap;
+      if (changed) emit();
+    } catch {
+      // ignore
+    }
+  };
+
+  const stopArpWatcher = () => {
+    if (arpWatchTimer) {
+      clearInterval(arpWatchTimer);
+      arpWatchTimer = null;
+    }
+  };
+
   const enrichDevices = async (plan: EnrichmentPlan) => {
-    const { hostnameLookups, vendorTargets } = plan;
+    const { hostnameLookups, vendorTargets, portScanTargets } = plan;
 
     if (hostnameLookups.length > 0) {
       const toLookup = hostnameLookups.slice(0, 8);
@@ -485,6 +601,18 @@ export const createScanner = () => {
 
       applyDeviceUpdates(vendorUpdates);
     }
+
+    if (portScanTargets.length > 0) {
+      const portUpdates = new Map<string, Partial<Device>>();
+
+      await mapWithConcurrency(portScanTargets, 4, async ({ ip, id }) => {
+        const openPorts = await scanPorts(ip);
+        portUpdates.set(id, { openPorts });
+        return null;
+      });
+
+      applyDeviceUpdates(portUpdates);
+    }
   };
 
   const scanOnce = async (
@@ -510,7 +638,7 @@ export const createScanner = () => {
           status: 'online',
           latencyMs: 0,
         })),
-        enrichment: { hostnameLookups: [], vendorTargets: new Map() },
+        enrichment: { hostnameLookups: [], vendorTargets: new Map(), portScanTargets: [] },
       };
     }
 
@@ -550,6 +678,7 @@ export const createScanner = () => {
     const buildDevicesFromSeen = (includeOffline: boolean, collectEnrichment: boolean): ScanResult => {
       const next: Device[] = [];
       const hostnameLookups: Array<{ ip: string; id: string }> = [];
+      const portScanTargets: Array<{ ip: string; id: string }> = [];
 
       for (const [ip, meta] of seen.entries()) {
         const mac = arpMap.get(ip);
@@ -564,6 +693,7 @@ export const createScanner = () => {
         hostname: existing?.hostname ?? mdnsName,
         vendor: existing?.vendor,
         mdnsName: existing?.mdnsName ?? mdnsName,
+        openPorts: existing?.openPorts,
         firstSeen: existing?.firstSeen ?? timestamp,
         lastSeen: timestamp,
         status: 'online',
@@ -574,6 +704,10 @@ export const createScanner = () => {
           record.hostname = hostnameCache.get(ip);
         } else if (!record.hostname && collectEnrichment && !hostnameCache.has(ip)) {
           hostnameLookups.push({ ip, id: record.id });
+        }
+
+        if (collectEnrichment && !record.openPorts) {
+          portScanTargets.push({ ip, id: record.id });
         }
 
         next.push(record);
@@ -610,7 +744,7 @@ export const createScanner = () => {
 
       return {
         devices: next.sort((a, b) => b.lastSeen - a.lastSeen),
-        enrichment: { hostnameLookups, vendorTargets },
+        enrichment: { hostnameLookups, vendorTargets, portScanTargets },
       };
     };
 
@@ -636,6 +770,7 @@ export const createScanner = () => {
     arpMap = await readNeighborTable();
     seedFromArp();
     seedLocalIps();
+    lastKnownMacs = arpMap;
 
     return buildDevicesFromSeen(true, true);
   };
@@ -688,6 +823,7 @@ export const createScanner = () => {
 
     void run();
     timer = setInterval(run, options.intervalMs ?? 8000);
+    arpWatchTimer = setInterval(() => void watchNeighborTable(), 2000);
     return devices;
   };
 
@@ -696,6 +832,7 @@ export const createScanner = () => {
       clearInterval(timer);
       timer = null;
     }
+    stopArpWatcher();
     stopMdnsBrowser();
   };
 

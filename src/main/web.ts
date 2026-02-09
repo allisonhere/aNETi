@@ -2,9 +2,10 @@ import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { join, normalize, extname } from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
-import { createScanner } from './scanner.js';
+import { createScanner, sendWakeOnLan } from './scanner.js';
 import { createDatabase } from './db.js';
 import { createSettingsStore } from './settings.js';
+import { createAiClient } from './ai.js';
 import type { Device } from './types.js';
 
 const env = process.env;
@@ -19,10 +20,17 @@ const disableAuth = env.ANETI_WEB_DISABLE_AUTH === '1';
 
 mkdirSync(dataDir, { recursive: true });
 
-const db = createDatabase(join(dataDir, 'aneti.sqlite'));
+const db = await createDatabase(join(dataDir, 'aneti.sqlite'));
 const settings = createSettingsStore(join(dataDir, 'settings.json'));
 const scanner = createScanner();
+const ai = createAiClient((provider) => settings.getSecret(provider));
 const labelById = new Map<string, string>();
+const baselineDeviceIds = new Set<string>();
+const lastSummaryAtById = new Map<string, number>();
+const aiQueue: Device[] = [];
+let aiWorking = false;
+let latestSummary: { text: string; provider: string; model: string; deviceId: string; createdAt: number } | null = null;
+const aiSummaryCooldownMs = 60_000;
 let scannerRunning = false;
 
 const mimeByExt: Record<string, string> = {
@@ -124,6 +132,40 @@ const buildStatsPayload = () => {
   };
 };
 
+const processAiQueue = async () => {
+  if (aiWorking) return;
+  aiWorking = true;
+  try {
+    while (aiQueue.length > 0) {
+      const device = aiQueue.shift();
+      if (!device) continue;
+      const snapshot = scanner.list();
+      const onlineDevices = snapshot.filter((item) => item.status === 'online').length;
+      const totalDevices = snapshot.length;
+      const detectedAt = device.lastSeen ?? Date.now();
+
+      const summary = await ai.summarizeNewDevice({
+        device,
+        totalDevices,
+        onlineDevices,
+        detectedAt,
+      });
+
+      if (!summary) continue;
+      const createdAt = Date.now();
+      db.addAlert({
+        type: 'ai_summary',
+        message: summary.text,
+        deviceId: device.id,
+        createdAt,
+      });
+      latestSummary = { ...summary, deviceId: device.id, createdAt };
+    }
+  } finally {
+    aiWorking = false;
+  }
+};
+
 const bridgeScript = () => `(() => {
   const authDisabled = ${disableAuth ? 'true' : 'false'};
   const key = 'aneti:web:token';
@@ -193,7 +235,23 @@ const bridgeScript = () => `(() => {
     updateDeviceLabel: (id, label) => req('POST', '/api/db/label', { id, label }),
     diagnostics: (options) => req('GET', '/api/scanner/diagnostics?maxHosts=' + (options?.maxHosts || '')),
     onDevices,
-    onSummary: () => () => {},
+    onSummary: (callback) => {
+      let active = true;
+      let lastCreatedAt = 0;
+      const poll = async () => {
+        if (!active) return;
+        try {
+          const data = await req('GET', '/api/ai/summary');
+          if (data && data.createdAt && data.createdAt > lastCreatedAt) {
+            lastCreatedAt = data.createdAt;
+            callback(data);
+          }
+        } catch {}
+      };
+      poll();
+      const t = setInterval(poll, 8000);
+      return () => { active = false; clearInterval(t); };
+    },
     settingsGet: () => req('GET', '/api/settings'),
     settingsUpdate: (provider, key) => req('POST', '/api/settings/provider', { provider, key }),
     settingsUpdateAccent: (accentId) => req('POST', '/api/settings/accent', { accentId }),
@@ -204,6 +262,7 @@ const bridgeScript = () => `(() => {
     settingsApiToken: () => req('GET', '/api/settings/api-token'),
     settingsRotateApiToken: () => req('POST', '/api/settings/api-token/rotate', {}),
     settingsTestNotification: async () => ({ ok: false, reason: 'unsupported_in_web_mode' }),
+    wakeDevice: (mac) => req('POST', '/api/device/wake', { mac }),
     copyText: (value) => navigator.clipboard?.writeText(String(value || '')).catch(() => {}),
   };
 })();`;
@@ -246,6 +305,7 @@ const serveStatic = (urlPath: string, response: ServerResponse): boolean => {
 const seedKnownDevices = () => {
   const existing = db.listDevices() as Device[];
   for (const device of existing) {
+    baselineDeviceIds.add(device.id);
     if (device.label) labelById.set(device.id, device.label);
   }
 };
@@ -258,6 +318,18 @@ scanner.onDevices((devices: Device[]) => {
     securityState: trustedIds.has(device.id) ? 'trusted' : null,
   }));
   db.syncDevices(labeled as Device[]);
+
+  const now = Date.now();
+  for (const device of labeled as Device[]) {
+    if (device.status !== 'online') continue;
+    if (baselineDeviceIds.has(device.id)) continue;
+    const lastSummaryAt = lastSummaryAtById.get(device.id) ?? 0;
+    if (now - lastSummaryAt < aiSummaryCooldownMs) continue;
+    lastSummaryAtById.set(device.id, now);
+    baselineDeviceIds.add(device.id);
+    aiQueue.push(device);
+  }
+  void processAiQueue();
 });
 
 seedKnownDevices();
@@ -329,6 +401,27 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === 'GET' && url.pathname === '/api/ai/summary') {
+      if (latestSummary) {
+        writeJson(response, 200, latestSummary);
+      } else {
+        const alerts = db.listAlerts(50) as Array<{ type: string; message: string; deviceId?: string | null; createdAt: number }>;
+        const last = alerts.find((a) => a.type === 'ai_summary');
+        if (last) {
+          writeJson(response, 200, {
+            text: last.message,
+            provider: 'unknown',
+            model: 'unknown',
+            deviceId: last.deviceId ?? '',
+            createdAt: last.createdAt,
+          });
+        } else {
+          writeJson(response, 200, null);
+        }
+      }
+      return;
+    }
+
     if (request.method === 'GET' && url.pathname === '/api/db/devices') {
       writeJson(response, 200, db.listDevices());
       return;
@@ -357,6 +450,14 @@ const server = createServer(async (request, response) => {
       } else {
         labelById.delete(id);
       }
+      writeJson(response, 200, result);
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/device/wake') {
+      const body = await parseJsonBody(request);
+      const mac = String(body?.mac ?? '');
+      const result = await sendWakeOnLan(mac);
       writeJson(response, 200, result);
       return;
     }
