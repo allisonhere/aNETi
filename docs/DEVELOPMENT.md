@@ -15,26 +15,6 @@ npm run build
 
 ## Common Issues
 
-### `better-sqlite3` NODE_MODULE_VERSION mismatch
-
-Symptom example:
-
-- module compiled for one Node/Electron ABI but current runtime expects another
-
-Fix:
-
-```bash
-npm rebuild better-sqlite3
-```
-
-If needed, reinstall:
-
-```bash
-rm -rf node_modules package-lock.json
-npm install
-npm rebuild better-sqlite3
-```
-
 ### Dev terminal feels "stuck" after `npm run dev`
 
 `npm run dev` runs Electron/Vite in a long-lived foreground process.

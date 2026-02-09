@@ -80,9 +80,30 @@ Example response shape:
       "status": "online",
       "firstSeen": 1738919000000,
       "lastSeen": 1738920000000,
-      "trusted": true
+      "trusted": true,
+      "openPorts": [80, 443, 8080]
     }
   ]
+}
+```
+
+### `POST /api/device/wake` (web mode only)
+
+Send a Wake-on-LAN magic packet to a device by MAC address.
+
+Request body:
+
+```json
+{
+  "mac": "aa:bb:cc:dd:ee:ff"
+}
+```
+
+Example response:
+
+```json
+{
+  "ok": true
 }
 ```
 

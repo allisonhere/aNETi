@@ -1,6 +1,6 @@
 # AnetI
 
-Continuous LAN discovery with real-time device intelligence, alerting, and SNMP-based enrichment.
+Continuous LAN discovery with real-time device intelligence, port scanning, Wake-on-LAN, and alerting.
 
 ![AnetI Dashboard](screenshot.png)
 
@@ -9,10 +9,14 @@ It continuously scans your local network, tracks device history, surfaces anomal
 ## Features
 
 - Realtime network scanning with progressive discovery updates
+- Port scanning (TCP connect scan on 20 common ports per device)
+- Wake-on-LAN to remotely wake devices from the UI
 - Device inventory with status, labels, vendor/hostname hints, and detail panels
 - Device history from sightings (online/offline markers + timeline)
 - Alert controls: startup warmup, global cooldown, per-device cooldown, per-device mute
-- Security controls: trusted device marking and anomaly highlighting for untrusted discoveries
+- Security controls: trusted device marking and persistent anomaly state for untrusted discoveries
+- Live network pulse graph with latency, new device, rejoin, and anomaly lines
+- Activity feed showing real-time network events (joins, departures, port changes, anomalies)
 - AI brief panel with optional provider keys (OpenAI, Gemini, Claude)
 - Local integration API for other apps (`/health`, `/stats`) protected by API token
 - Theme accent presets in Settings
@@ -21,7 +25,7 @@ It continuously scans your local network, tracks device history, surfaces anomal
 
 - Electron + electron-vite
 - React + TypeScript
-- better-sqlite3
+- sql.js (SQLite via WebAssembly)
 
 ## Project Structure
 
@@ -157,6 +161,12 @@ curl -fsSL https://raw.githubusercontent.com/allisonhere/aNETi/main/scripts/prox
 - enables `aneti-web.service` for browser access at port `8787`
 - prunes dev dependencies to minimize disk usage
 
+### Updating an Existing Installation
+
+```bash
+cd /opt/aneti && git pull && npm ci && npm run build:web && npm prune --omit=dev && systemctl restart aneti-web
+```
+
 ### Notes
 
 - run as `root`
@@ -193,7 +203,7 @@ Full details: `docs/INTEGRATIONS_API.md`.
 
 ## Troubleshooting
 
-For common issues (including `better-sqlite3` Node module version mismatch), see `docs/DEVELOPMENT.md`.
+For common issues, see `docs/DEVELOPMENT.md`.
 
 ## Changelog
 
