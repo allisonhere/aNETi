@@ -13,7 +13,7 @@ RUN npm run build:web
 FROM node:22-bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    iputils-ping iproute2 net-tools && \
+    iputils-ping iputils-arping iproute2 net-tools && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

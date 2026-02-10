@@ -39,6 +39,7 @@ type ScannerDiagnostics = {
     ping: boolean;
     ip: boolean;
     arp: boolean;
+    arping: boolean;
     procArp: boolean;
   };
 };
@@ -161,6 +162,10 @@ const arpCandidates = process.platform === 'win32'
   ? ['arp']
   : ['arp', '/usr/sbin/arp', '/sbin/arp', '/usr/bin/arp'];
 
+const arpingCandidates = process.platform === 'win32'
+  ? []
+  : ['arping', '/usr/sbin/arping', '/sbin/arping', '/usr/bin/arping'];
+
 const pathHasExecutable = (cmd: string) => {
   if (cmd.includes('/')) {
     return existsSync(cmd);
@@ -200,6 +205,20 @@ const pingHost = async (ip: string) => {
       return Number.isFinite(value) ? Math.round(value) : 1;
     }
     return 1;
+  } catch {
+    return null;
+  }
+};
+
+const arpingHost = async (ip: string): Promise<string | null> => {
+  try {
+    const { stdout } = await execFirstAvailable(
+      arpingCandidates,
+      ['-c', '1', '-w', '1', ip],
+      2000
+    );
+    const match = stdout.toString().match(/\[([0-9a-fA-F:]{17})\]/);
+    return match ? match[1].toLowerCase() : null;
   } catch {
     return null;
   }
@@ -675,6 +694,19 @@ export const createScanner = () => {
     seedFromArp();
     seedLocalIps();
 
+    // ARP scan pass — catches sleepy devices that ignore ICMP
+    if (hasAnyExecutable(arpingCandidates)) {
+      const arpTargets = hosts.filter((ip) => !seen.has(ip));
+      await mapWithConcurrency(arpTargets, 16, async (ip) => {
+        const mac = await arpingHost(ip);
+        if (mac) {
+          seen.set(ip, { latency: null });
+          arpMap.set(ip, mac);
+        }
+        return null;
+      });
+    }
+
     const buildDevicesFromSeen = (includeOffline: boolean, collectEnrichment: boolean): ScanResult => {
       const next: Device[] = [];
       const hostnameLookups: Array<{ ip: string; id: string }> = [];
@@ -791,6 +823,7 @@ export const createScanner = () => {
         ping: hasAnyExecutable(pingCandidates),
         ip: hasAnyExecutable(ipCandidates),
         arp: hasAnyExecutable(arpCandidates),
+        arping: hasAnyExecutable(arpingCandidates),
         procArp: process.platform === 'linux' && existsSync('/proc/net/arp'),
       },
     };

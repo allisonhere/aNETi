@@ -609,6 +609,7 @@ export default function App() {
         if (status.state === 'completed') {
           setUpdatingSystem(false);
           showToast('Update complete! Reloading...', 'success');
+          localStorage.setItem('aneti:post-update', '1');
           setTimeout(() => location.reload(), 2000);
         } else if (status.state === 'failed') {
           setUpdatingSystem(false);
@@ -795,6 +796,14 @@ export default function App() {
       window.aneti?.stopScan();
     };
   }, [showToast]);
+
+  useEffect(() => {
+    if (localStorage.getItem('aneti:post-update')) {
+      localStorage.removeItem('aneti:post-update');
+      setView('settings');
+      showToast('Update installed successfully!', 'success');
+    }
+  }, []);
 
   useEffect(() => {
     if (!expandedDeviceId) return;

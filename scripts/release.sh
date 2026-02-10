@@ -221,8 +221,15 @@ preflight_release() {
     print_error "package.json not found in $PROJECT_DIR"
     return 1
   }
+  [ -f "$PROJECT_DIR/package-lock.json" ] || {
+    print_error "package-lock.json not found in $PROJECT_DIR"
+    return 1
+  }
   [ -f "$PROJECT_DIR/.github/workflows/build-release-installers.yml" ] || {
     print_warning "Installer workflow missing: .github/workflows/build-release-installers.yml"
+  }
+  [ -f "$PROJECT_DIR/.github/workflows/docker-publish.yml" ] || {
+    print_warning "Docker publish workflow missing: .github/workflows/docker-publish.yml"
   }
 
   require_cli git
@@ -354,9 +361,13 @@ clean_builds() {
 }
 
 build_app() {
-  print_substep "Building application..."
-  run_with_spinner "Running app build..." npm -C "$PROJECT_DIR" run build
-  print_success "App build complete"
+  print_substep "Building Electron app..."
+  run_with_spinner "Electron build" npm -C "$PROJECT_DIR" run build
+
+  print_substep "Building web app..."
+  run_with_spinner "Web build" npm -C "$PROJECT_DIR" run build:web
+
+  print_success "All builds complete"
 }
 
 build_packages() {
@@ -364,22 +375,33 @@ build_packages() {
   TAG="v$VERSION"
   local release_dir="$DIST_DIR/release"
   local bundle="$release_dir/${PROJECT_NAME}-${TAG}-bundle.tar.gz"
+  local web_bundle="$release_dir/${PROJECT_NAME}-${TAG}-web.tar.gz"
   local source="$release_dir/${PROJECT_NAME}-${TAG}-source.tar.gz"
   local sums="$release_dir/SHA256SUMS-${TAG}.txt"
 
   run_cmd mkdir -p "$release_dir"
 
-  # Runtime bundle
-  run_cmd tar -czf "$bundle" -C "$PROJECT_DIR" dist out package.json README.md LICENSE CHANGELOG.md
+  # Full runtime bundle (Electron + web)
+  run_cmd tar -czf "$bundle" -C "$PROJECT_DIR" \
+    dist out package.json package-lock.json README.md LICENSE CHANGELOG.md
+
+  # Web-only bundle (Docker / bare-metal web mode)
+  run_cmd tar -czf "$web_bundle" -C "$PROJECT_DIR" \
+    out/web dist/renderer package.json package-lock.json README.md LICENSE CHANGELOG.md
 
   # Source archive from current commit
   run_cmd git -C "$PROJECT_DIR" archive --format=tar.gz --prefix="${PROJECT_NAME}-${TAG}/" -o "$source" HEAD
 
-  run_cmd bash -lc "cd '$release_dir' && sha256sum '$(basename "$bundle")' '$(basename "$source")' > '$(basename "$sums")'"
+  run_cmd bash -lc "cd '$release_dir' && sha256sum \
+    '$(basename "$bundle")' \
+    '$(basename "$web_bundle")' \
+    '$(basename "$source")' \
+    > '$(basename "$sums")'"
 
-  RELEASE_ASSETS=("$bundle" "$source" "$sums")
+  RELEASE_ASSETS=("$bundle" "$web_bundle" "$source" "$sums")
 
   print_file_size "$bundle"
+  print_file_size "$web_bundle"
   print_file_size "$source"
   print_file_size "$sums"
   print_success "Package build complete"
@@ -402,7 +424,8 @@ commit_changes() {
     msg=${msg:-$default_msg}
   fi
 
-  run_cmd git -C "$PROJECT_DIR" add -A
+  # Stage all tracked modified files
+  run_cmd git -C "$PROJECT_DIR" add -u
   run_cmd git -C "$PROJECT_DIR" commit -m "$msg"
   print_success "Changes committed"
 }
@@ -446,6 +469,10 @@ create_remote_release() {
   else
     gh release create "$TAG" "${RELEASE_ASSETS[@]}" --title "$title" --repo "$REMOTE_REPO" "${notes_args[@]}"
   fi
+
+  # Tag push triggers docker-publish.yml which builds versioned image tags
+  print_info "Docker image build triggered (tag push -> ghcr.io)"
+  print_info "Image tags: latest, $VERSION, ${VERSION%.*}, $(git -C "$PROJECT_DIR" rev-parse --short HEAD)"
 
   print_success "Remote release step complete"
 }
@@ -542,7 +569,11 @@ full_release() {
   total_time=$(($(date +%s) - TOTAL_START))
   echo ""
   echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-  echo -e "${BOLD}${GREEN}  ✓ Release workflow complete${NC} ${DIM}($(format_time "$total_time"))${NC}"
+  echo -e "${BOLD}${GREEN}  Release workflow complete${NC} ${DIM}($(format_time "$total_time"))${NC}"
+  echo ""
+  echo -e "  ${BOLD}Version:${NC}  ${CYAN}v$VERSION${NC}"
+  echo -e "  ${BOLD}Release:${NC}  ${DIM}https://github.com/$REMOTE_REPO/releases/tag/$TAG${NC}"
+  echo -e "  ${BOLD}Docker:${NC}   ${DIM}ghcr.io/${REMOTE_REPO,,}:$VERSION${NC}"
   echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 }
 
