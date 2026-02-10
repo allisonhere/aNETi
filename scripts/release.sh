@@ -54,7 +54,7 @@ TAG=""
 print_header() {
   clear
   echo -e "${BLUE}╔════════════════════════════════════════════════════════════╗${NC}"
-  echo -e "${BLUE}║${NC}               ${BOLD}${CYAN}AnetI Release Builder${NC}                    ${BLUE}║${NC}"
+  echo -e "${BLUE}║${NC}               ${BOLD}${CYAN}AnetI Release Builder${NC}                        ${BLUE}║${NC}"
   echo -e "${BLUE}╚════════════════════════════════════════════════════════════╝${NC}"
   echo ""
 }
@@ -415,8 +415,8 @@ check_large_files() {
   local limit_mb=50
   local limit_bytes=$((limit_mb * 1024 * 1024))
   local large_files
-  large_files=$(git -C "$PROJECT_DIR" diff --cached --diff-filter=d --name-only -z \
-    | xargs -0 -I{} sh -c '
+  large_files=$(git -C "$PROJECT_DIR" diff --cached --diff-filter=d --name-only -z |
+    xargs -0 -I{} sh -c '
       f="'"$PROJECT_DIR"'/{}"; [ -f "$f" ] && size=$(wc -c < "$f") && [ "$size" -gt '"$limit_bytes"' ] && echo "  $(( size / 1024 / 1024 ))MB  {}"
     ' 2>/dev/null || true)
   if [ -n "$large_files" ]; then
@@ -734,7 +734,10 @@ main_menu() {
     8) create_remote_release ;;
     9) publish_packages ;;
     10) full_release ;;
-    0) echo ""; exit 0 ;;
+    0)
+      echo ""
+      exit 0
+      ;;
     *) print_error "Invalid choice" ;;
     esac
     echo ""

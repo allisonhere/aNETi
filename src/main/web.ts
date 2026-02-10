@@ -294,7 +294,7 @@ const bridgeScript = () => `(() => {
     updateCheck: () => req('GET', '/api/system/update-check'),
     updateStart: () => req('POST', '/api/system/update', {}),
     updateStatus: () => req('GET', '/api/system/update-status'),
-    copyText: (value) => navigator.clipboard?.writeText(String(value || '')).catch(() => {}),
+    copyText: null,
   };
 })();`;
 
