@@ -317,10 +317,11 @@ EOFSTATUS
 
 trap 'write_status "failed" "unexpected error" 0 "\\"Update script failed at step: $CURRENT_STEP\\""; exit 1' ERR
 
-CURRENT_STEP="git pull"
-write_status "in_progress" "git pull --ff-only" 1 "null"
+CURRENT_STEP="git fetch"
+write_status "in_progress" "git fetch + reset" 1 "null"
 cd "$INSTALL_DIR"
-git pull --ff-only
+git fetch origin
+git reset --hard origin/main
 
 CURRENT_STEP="npm ci"
 write_status "in_progress" "npm ci" 2 "null"

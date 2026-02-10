@@ -628,6 +628,7 @@ export default function App() {
     let unsubscribeSummary: (() => void) | undefined;
     let pollTimer: number | undefined;
     let bridgeTimer: number | undefined;
+    let scanTimeoutTimer: number | undefined;
     let cancelled = false;
 
     const boot = async () => {
@@ -681,6 +682,13 @@ export default function App() {
       });
       if (!hasScanResult.current) {
         setScanStatus('scanning');
+        // Fall through to diagnostics after 30s if no devices found
+        scanTimeoutTimer = window.setTimeout(() => {
+          if (!hasScanResult.current) {
+            hasScanResult.current = true;
+            setScanStatus('ready');
+          }
+        }, 30_000);
       }
       setScanning(true);
 
@@ -702,7 +710,7 @@ export default function App() {
             ...Array.from({ length: rejoins }, () => stamp),
           ]);
         }
-        if (!hasScanResult.current) {
+        if (!hasScanResult.current && list.length > 0) {
           hasScanResult.current = true;
           setScanStatus('ready');
         }
@@ -789,6 +797,7 @@ export default function App() {
       unsubscribeSummary?.();
       if (pollTimer) window.clearInterval(pollTimer);
       if (bridgeTimer) window.clearInterval(bridgeTimer);
+      if (scanTimeoutTimer) window.clearTimeout(scanTimeoutTimer);
       window.aneti?.stopScan();
     };
   }, [showToast]);

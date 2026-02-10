@@ -480,7 +480,7 @@ if [ -d "$INSTALL_DIR/.git" ]; then
   echo "[aneti] Updating existing checkout in $INSTALL_DIR..."
   git -C "$INSTALL_DIR" fetch origin
   git -C "$INSTALL_DIR" checkout "$BRANCH"
-  git -C "$INSTALL_DIR" pull --ff-only origin "$BRANCH"
+  git -C "$INSTALL_DIR" reset --hard "origin/$BRANCH"
 else
   echo "[aneti] Cloning repository to $INSTALL_DIR..."
   rm -rf "$INSTALL_DIR"

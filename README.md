@@ -165,7 +165,7 @@ curl -fsSL https://raw.githubusercontent.com/allisonhere/aNETi/main/scripts/prox
 ### Updating an Existing Installation
 
 ```bash
-cd /opt/aneti && git pull && npm ci && npm run build:web && npm prune --omit=dev && systemctl restart aneti-web
+cd /opt/aneti && git fetch origin && git reset --hard origin/main && npm ci && npm run build:web && npm prune --omit=dev && systemctl restart aneti-web
 ```
 
 ### Notes
