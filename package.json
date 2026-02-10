@@ -1,14 +1,14 @@
 {
   "name": "aneti",
   "productName": "AnetI",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "private": true,
   "type": "module",
   "main": "out/main/index.js",
   "scripts": {
     "dev": "ELECTRON_ENTRY=out/main/index.js ELECTRON_RENDERER_URL=http://localhost:5173 ELECTRON_PRELOAD=src/preload/dev.cjs electron-vite dev",
     "build": "electron-vite build",
-    "build:web": "rm -rf out/web dist/renderer && vite build --config vite.config.web.ts && tsc -p tsconfig.web.json",
+    "build:web": "(rm -rf out/web dist/renderer 2>/dev/null || sudo rm -rf out/web dist/renderer) && vite build --config vite.config.web.ts && tsc -p tsconfig.web.json",
     "preview": "electron-vite preview",
     "start:web": "node out/web/web.js",
     "web": "npm run build:web && echo '' && echo '  ⚡ AnetI web ready → http://localhost:8787' && echo '' && node out/web/web.js",

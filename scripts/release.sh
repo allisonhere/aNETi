@@ -355,7 +355,13 @@ bump_version() {
 
 clean_builds() {
   print_substep "Cleaning build artifacts..."
-  run_cmd rm -rf "$PROJECT_DIR/out" "$PROJECT_DIR/dist"
+  for d in "$PROJECT_DIR/out" "$PROJECT_DIR/dist"; do
+    [ -e "$d" ] || continue
+    run_cmd rm -rf "$d" 2>/dev/null || {
+      print_warning "Permission denied on $d (root-owned files from Docker?). Retrying with sudo..."
+      run_cmd sudo rm -rf "$d"
+    }
+  done
   run_cmd mkdir -p "$DIST_DIR/release"
   print_success "Clean complete"
 }
