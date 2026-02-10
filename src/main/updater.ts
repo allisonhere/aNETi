@@ -48,7 +48,7 @@ const compareSemver = (current: string, latest: string): boolean => {
 
 const getLocalCommitSha = (): string => {
   try {
-    return execSync('git rev-parse HEAD', { cwd: process.cwd(), encoding: 'utf8' }).trim();
+    return execSync('git rev-parse HEAD', { cwd: process.cwd(), encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
   } catch {
     return '';
   }
