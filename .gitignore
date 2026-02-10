@@ -10,6 +10,12 @@ out/
 .turbo/
 .cache/
 
+# Runtime data (SQLite DB, settings, WAL files)
+data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

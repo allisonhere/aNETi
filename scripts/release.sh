@@ -424,9 +424,8 @@ commit_changes() {
     msg=${msg:-$default_msg}
   fi
 
-  # Stage version-bumped manifests and any other tracked changes
-  run_cmd git -C "$PROJECT_DIR" add package.json package-lock.json
-  run_cmd git -C "$PROJECT_DIR" add -u
+  # Stage all changes (tracked, modified, and untracked)
+  run_cmd git -C "$PROJECT_DIR" add -A
   run_cmd git -C "$PROJECT_DIR" commit -m "$msg"
   print_success "Changes committed"
 }
