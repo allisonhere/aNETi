@@ -461,7 +461,12 @@ app.whenReady().then(async () => {
     scannerRunning = false;
     return scanner.stop();
   });
-  ipcMain.handle('scanner:list', () => scanner.list());
+  ipcMain.handle('scanner:list', () =>
+    (scanner.list() as Device[]).map((device) => ({
+      ...device,
+      label: labelById.get(device.id) ?? device.label,
+    }))
+  );
   ipcMain.handle('scanner:diagnostics', (_event, options) => scanner.diagnostics(options));
   ipcMain.handle('device:wake', (_event, mac: string) => sendWakeOnLan(mac));
   ipcMain.handle('db:devices', () => db?.listDevices() ?? []);

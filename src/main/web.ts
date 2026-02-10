@@ -25,7 +25,7 @@ const scanMaxHosts = Number(env.ANETI_SCAN_MAX_HOSTS ?? 1024);
 const scanBatchSize = Number(env.ANETI_SCAN_BATCH_SIZE ?? 64);
 const dataDir = env.ANETI_DATA_DIR ?? '/var/lib/aneti';
 const rendererDir = env.ANETI_RENDERER_DIR ?? join(process.cwd(), 'dist/renderer');
-const disableAuth = env.ANETI_WEB_DISABLE_AUTH === '1';
+const disableAuth = env.ANETI_WEB_ENABLE_AUTH !== '1';
 
 mkdirSync(dataDir, { recursive: true });
 clearStaleStatus(dataDir);
@@ -417,7 +417,11 @@ const server = createServer(async (request, response) => {
     }
 
     if (request.method === 'GET' && url.pathname === '/api/scanner/list') {
-      writeJson(response, 200, scanner.list());
+      const devices = (scanner.list() as Device[]).map((device) => ({
+        ...device,
+        label: labelById.get(device.id) ?? device.label,
+      }));
+      writeJson(response, 200, devices);
       return;
     }
 

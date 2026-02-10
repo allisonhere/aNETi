@@ -308,14 +308,27 @@ function NetworkPulseHero({
     return () => clearInterval(id);
   }, []);
 
+  const chipsRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = chipsRef.current;
+    const head = el?.parentElement;
+    if (!el || !head) return;
+    const update = () => {
+      const canScroll = el.scrollWidth - el.scrollLeft - el.clientWidth > 1;
+      head.style.setProperty('--chips-fade', canScroll ? '1' : '0');
+    };
+    update();
+    el.addEventListener('scroll', update, { passive: true });
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => { el.removeEventListener('scroll', update); ro.disconnect(); };
+  }, []);
+
   return (
     <section className="mt-8 pulse-hero">
       <div className="pulse-head">
-        <div>
-          <div className="pulse-kicker">Network Pulse</div>
-          <h2 className="pulse-title">Realtime discovery signal</h2>
-        </div>
-        <div className="pulse-chips">
+        <div className="pulse-kicker">Network Pulse</div>
+        <div className="pulse-chips" ref={chipsRef}>
           <span className="pulse-chip pulse-chip--accent">
             <Activity className="pulse-chip-icon" />
             Online {onlineCount}
@@ -324,66 +337,49 @@ function NetworkPulseHero({
             <CircleCheck className="pulse-chip-icon" />
             Trusted {trustedCount}
           </span>
-          <span className="pulse-chip pulse-chip--red">
-            <ShieldAlert className="pulse-chip-icon" />
-            Anomalies {anomalyCount}
-          </span>
-          <span className="pulse-chip pulse-chip--cyan">
-            <Zap className="pulse-chip-icon" />
-            New / {windowLabel} {newDevices}
-          </span>
-          <span className="pulse-chip pulse-chip--amber">
-            <Activity className="pulse-chip-icon" />
-            Rejoins / {windowLabel} {rejoins}
-          </span>
-          <span className="pulse-chip pulse-chip--purple">
-            <Activity className="pulse-chip-icon" />
-            Latency {avgLatency > 0 ? `${avgLatency} ms` : '—'}
-          </span>
-        </div>
-      </div>
-
-      <div className="pulse-controls">
-        <div className="pulse-control-group">
-          {(['1m', '5m', '15m'] as const).map((window) => (
-            <button
-              key={window}
-              type="button"
-              className={cn('pulse-control-button', windowLabel === window && 'pulse-control-button--active')}
-              onClick={() => onWindowChange(window)}
-            >
-              {window}
-            </button>
-          ))}
-        </div>
-        <div className="pulse-control-group">
+          <div className="pulse-control-group">
+            {(['1m', '5m', '15m'] as const).map((window) => (
+              <button
+                key={window}
+                type="button"
+                className={cn('pulse-control-button', windowLabel === window && 'pulse-control-button--active')}
+                onClick={() => onWindowChange(window)}
+              >
+                {window}
+              </button>
+            ))}
+          </div>
           <button
             type="button"
-            className={cn('pulse-control-button pulse-control-button--cyan', showNew && 'pulse-control-button--active')}
+            className={cn('pulse-chip pulse-chip--cyan pulse-chip--toggle', !showNew && 'pulse-chip--muted')}
             onClick={() => onToggleLine('new')}
           >
-            New
+            <Zap className="pulse-chip-icon" />
+            New / {windowLabel} {newDevices}
           </button>
           <button
             type="button"
-            className={cn('pulse-control-button pulse-control-button--amber', showRejoins && 'pulse-control-button--active')}
+            className={cn('pulse-chip pulse-chip--amber pulse-chip--toggle', !showRejoins && 'pulse-chip--muted')}
             onClick={() => onToggleLine('rejoins')}
           >
-            Rejoins
+            <Activity className="pulse-chip-icon" />
+            Rejoins / {windowLabel} {rejoins}
           </button>
           <button
             type="button"
-            className={cn('pulse-control-button pulse-control-button--red', showAnomalies && 'pulse-control-button--active')}
+            className={cn('pulse-chip pulse-chip--red pulse-chip--toggle', !showAnomalies && 'pulse-chip--muted')}
             onClick={() => onToggleLine('anomalies')}
           >
-            Anomalies
+            <ShieldAlert className="pulse-chip-icon" />
+            Anomalies {anomalyCount}
           </button>
           <button
             type="button"
-            className={cn('pulse-control-button pulse-control-button--purple', showLatency && 'pulse-control-button--active')}
+            className={cn('pulse-chip pulse-chip--purple pulse-chip--toggle', !showLatency && 'pulse-chip--muted')}
             onClick={() => onToggleLine('latency')}
           >
-            Latency
+            <Activity className="pulse-chip-icon" />
+            Latency {avgLatency > 0 ? `${avgLatency} ms` : '—'}
           </button>
         </div>
       </div>
@@ -966,12 +962,25 @@ export default function App() {
   const isElectron = typeof navigator !== 'undefined' && navigator.userAgent.toLowerCase().includes('electron');
   const preloadMeta = typeof window !== 'undefined' ? window.anetiMeta : undefined;
 
+  const lineDefaults = { cyan: '34, 211, 238', amber: '245, 158, 11', purple: '167, 139, 250', anomaly: '248, 113, 113' };
+  const lineSwaps: Record<string, Partial<typeof lineDefaults>> = {
+    sky:    { cyan: '45, 212, 191' },     // teal — avoid clash with sky-blue accent
+    amber:  { amber: '52, 211, 153' },    // emerald — avoid clash with amber accent
+    rose:   { anomaly: '163, 230, 53' },  // lime — avoid clash with rose accent
+    purple: { purple: '236, 72, 153' },   // pink — avoid clash with purple accent
+  };
+
   const applyAccent = (id: string | null) => {
     if (typeof document === 'undefined') return;
     const preset = accentPresets.find((item) => item.id === id) ?? accentPresets[0];
-    document.documentElement.style.setProperty('--accent-200-rgb', preset.colors[200]);
-    document.documentElement.style.setProperty('--accent-300-rgb', preset.colors[300]);
-    document.documentElement.style.setProperty('--accent-400-rgb', preset.colors[400]);
+    const root = document.documentElement.style;
+    root.setProperty('--accent-200-rgb', preset.colors[200]);
+    root.setProperty('--accent-300-rgb', preset.colors[300]);
+    root.setProperty('--accent-400-rgb', preset.colors[400]);
+    const swaps = lineSwaps[preset.id] ?? {};
+    for (const key of Object.keys(lineDefaults) as (keyof typeof lineDefaults)[]) {
+      root.setProperty(`--line-${key}`, swaps[key] ?? lineDefaults[key]);
+    }
   };
 
   useEffect(() => {

@@ -11,6 +11,7 @@
     "build:web": "rm -rf out/web dist/renderer && vite build --config vite.config.web.ts && tsc -p tsconfig.web.json",
     "preview": "electron-vite preview",
     "start:web": "node out/web/web.js",
+    "web": "npm run build:web && echo '' && echo '  ⚡ AnetI web ready → http://localhost:8787' && echo '' && node out/web/web.js",
     "package:deb": "electron-builder --config electron-builder.yml --linux deb --publish never"
   },
   "dependencies": {

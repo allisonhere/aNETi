@@ -767,7 +767,7 @@ export const createScanner = () => {
         const offlineAfter = (options.intervalMs ?? 8000) * 2;
         for (const device of devices) {
           if (!next.find((candidate) => candidate.id === device.id)) {
-            if (timestamp - device.lastSeen < offlineAfter) {
+            if (device.status === 'online' || timestamp - device.lastSeen < offlineAfter) {
               next.push({ ...device, status: 'offline' });
             }
           }
