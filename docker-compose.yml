@@ -7,6 +7,7 @@ services:
       - NET_ADMIN
     volumes:
       - aneti-data:/var/lib/aneti
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - ANETI_WEB_HOST=0.0.0.0
       - ANETI_WEB_PORT=8787

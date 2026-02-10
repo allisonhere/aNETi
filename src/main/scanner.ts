@@ -694,19 +694,6 @@ export const createScanner = () => {
     seedFromArp();
     seedLocalIps();
 
-    // ARP scan pass — catches sleepy devices that ignore ICMP
-    if (hasAnyExecutable(arpingCandidates)) {
-      const arpTargets = hosts.filter((ip) => !seen.has(ip));
-      await mapWithConcurrency(arpTargets, 16, async (ip) => {
-        const mac = await arpingHost(ip);
-        if (mac) {
-          seen.set(ip, { latency: null });
-          arpMap.set(ip, mac);
-        }
-        return null;
-      });
-    }
-
     const buildDevicesFromSeen = (includeOffline: boolean, collectEnrichment: boolean): ScanResult => {
       const next: Device[] = [];
       const hostnameLookups: Array<{ ip: string; id: string }> = [];
@@ -797,6 +784,20 @@ export const createScanner = () => {
         const partial = buildDevicesFromSeen(false, false);
         onPartial(partial.devices);
       }
+    }
+
+    // ARP scan pass — runs after ping so results appear fast, then catches
+    // sleepy devices that ignore ICMP but respond to ARP
+    if (hasAnyExecutable(arpingCandidates)) {
+      const arpTargets = hosts.filter((ip) => !seen.has(ip));
+      await mapWithConcurrency(arpTargets, 16, async (ip) => {
+        const mac = await arpingHost(ip);
+        if (mac) {
+          seen.set(ip, { latency: null });
+          arpMap.set(ip, mac);
+        }
+        return null;
+      });
     }
 
     arpMap = await readNeighborTable();
