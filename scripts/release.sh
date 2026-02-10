@@ -411,6 +411,23 @@ build_packages() {
 # GIT & RELEASE FUNCTIONS
 # ============================================================================
 
+check_large_files() {
+  local limit_mb=50
+  local limit_bytes=$((limit_mb * 1024 * 1024))
+  local large_files
+  large_files=$(git -C "$PROJECT_DIR" diff --cached --diff-filter=d --name-only -z \
+    | xargs -0 -I{} sh -c '
+      f="'"$PROJECT_DIR"'/{}"; [ -f "$f" ] && size=$(wc -c < "$f") && [ "$size" -gt '"$limit_bytes"' ] && echo "  $(( size / 1024 / 1024 ))MB  {}"
+    ' 2>/dev/null || true)
+  if [ -n "$large_files" ]; then
+    print_error "Staged files exceed ${limit_mb}MB limit:"
+    echo "$large_files"
+    print_info "Add these paths to .gitignore or unstage them before committing."
+    run_cmd git -C "$PROJECT_DIR" reset HEAD -- .
+    return 1
+  fi
+}
+
 commit_changes() {
   if [ -z "$(git -C "$PROJECT_DIR" status --porcelain)" ]; then
     print_info "No changes to commit"
@@ -426,6 +443,10 @@ commit_changes() {
 
   # Stage all changes (tracked, modified, and untracked)
   run_cmd git -C "$PROJECT_DIR" add -A
+
+  # Abort if any staged file exceeds the size limit
+  check_large_files || return 1
+
   run_cmd git -C "$PROJECT_DIR" commit -m "$msg"
   print_success "Changes committed"
 }
