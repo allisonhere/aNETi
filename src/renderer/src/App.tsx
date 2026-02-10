@@ -152,6 +152,49 @@ function StatCard({ label, value, tone }: { label: string; value: string; tone?:
   );
 }
 
+/* ── Shared SVG path helpers ── */
+function sparkNormalize(value: number, min: number, max: number, chartH: number, padY: number) {
+  if (max <= min) return padY + chartH / 2;
+  const ratio = Math.min(Math.max((value - min) / (max - min), 0), 1);
+  return padY + chartH - ratio * chartH;
+}
+
+function sparkLinePath(values: number[], min: number, max: number, chartW: number, chartH: number, padX: number, padY: number) {
+  if (values.length === 0) return '';
+  if (values.length === 1) {
+    const y = sparkNormalize(values[0], min, max, chartH, padY);
+    return `M ${padX} ${y} L ${padX + chartW} ${y}`;
+  }
+  const n = values.length;
+  const step = chartW / (n - 1);
+  const pts = values.map((v, i) => ({ x: padX + step * i, y: sparkNormalize(v, min, max, chartH, padY) }));
+  // Monotone cubic spline (Catmull-Rom → cubic Bezier)
+  const tangents: { x: number; y: number }[] = [];
+  for (let i = 0; i < n; i++) {
+    if (i === 0) tangents.push({ x: (pts[1].x - pts[0].x) / 3, y: (pts[1].y - pts[0].y) / 3 });
+    else if (i === n - 1) tangents.push({ x: (pts[n - 1].x - pts[n - 2].x) / 3, y: (pts[n - 1].y - pts[n - 2].y) / 3 });
+    else tangents.push({ x: (pts[i + 1].x - pts[i - 1].x) / 6, y: (pts[i + 1].y - pts[i - 1].y) / 6 });
+  }
+  let d = `M ${pts[0].x} ${pts[0].y}`;
+  for (let i = 1; i < n; i++) {
+    const cp1x = pts[i - 1].x + tangents[i - 1].x;
+    const cp1y = pts[i - 1].y + tangents[i - 1].y;
+    const cp2x = pts[i].x - tangents[i].x;
+    const cp2y = pts[i].y - tangents[i].y;
+    d += ` C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${pts[i].x} ${pts[i].y}`;
+  }
+  return d;
+}
+
+function sparkAreaPath(values: number[], min: number, max: number, chartW: number, chartH: number, padX: number, padY: number) {
+  if (values.length === 0) return '';
+  const bottom = chartH + padY;
+  const line = sparkLinePath(values, min, max, chartW, chartH, padX, padY);
+  if (!line) return '';
+  const lastX = values.length === 1 ? padX + chartW : padX + chartW;
+  return `${line} L ${lastX} ${bottom} L ${padX} ${bottom} Z`;
+}
+
 function NetworkPulseHero({
   samples,
   devices,
@@ -302,11 +345,35 @@ function NetworkPulseHero({
   }, [devices]);
 
   // Tick "ago" labels every 10s
-  const [, setAgeTick] = useState(0);
+  const [ageTick, setAgeTick] = useState(0);
   useEffect(() => {
     const id = setInterval(() => setAgeTick((n) => n + 1), 10_000);
     return () => clearInterval(id);
   }, []);
+
+  const BUCKET_COUNT = 30;
+  const BUCKET_MS = 10_000;
+  const activityBuckets = useMemo(() => {
+    const now = Date.now();
+    const kinds = ['joined', 'returned', 'left', 'ports', 'anomaly'] as const;
+    const buckets: Record<string, number>[] = Array.from({ length: BUCKET_COUNT }, () =>
+      Object.fromEntries(kinds.map((k) => [k, 0]))
+    );
+    for (const evt of activityEvents) {
+      const age = now - evt.ts;
+      const idx = BUCKET_COUNT - 1 - Math.floor(age / BUCKET_MS);
+      if (idx >= 0 && idx < BUCKET_COUNT) buckets[idx][evt.kind]++;
+    }
+    return buckets;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activityEvents, ageTick]);
+
+  const activityIcon: Record<ActivityEvent['kind'], string> = {
+    joined: '+', returned: '↑', left: '↓', ports: '⬡', anomaly: '!',
+  };
+  const activityVerb: Record<ActivityEvent['kind'], string> = {
+    joined: 'joined', returned: 'came back', left: 'went offline', ports: 'ports', anomaly: 'flagged',
+  };
 
   const chipsRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -405,24 +472,34 @@ function NetworkPulseHero({
 
         <div className="pulse-mini">
           <div className="pulse-mini-label pulse-mini-label--accent">Activity</div>
+          <svg viewBox="0 0 200 40" className="activity-chart" preserveAspectRatio="none">
+            {activityBuckets.map((bucket, i) => {
+              const kinds = ['joined', 'returned', 'left', 'ports', 'anomaly'] as const;
+              const barW = 200 / BUCKET_COUNT;
+              const x = barW * i;
+              let yOffset = 0;
+              const maxStack = 4;
+              return kinds.map((kind) => {
+                if (!bucket[kind]) return null;
+                const h = Math.min(bucket[kind] / maxStack, 1) * 36;
+                const y = 40 - yOffset - h;
+                yOffset += h;
+                return (
+                  <rect key={`${i}-${kind}`} x={x + 0.5} y={y} width={barW - 1} height={h}
+                        rx={1} className={`activity-bar activity-bar--${kind}`} />
+                );
+              });
+            })}
+            <line x1={199} y1={0} x2={199} y2={40} className="activity-chart-now" />
+          </svg>
           <div className="activity-feed">
             {activityEvents.length === 0 && <div className="activity-empty">Waiting for changes...</div>}
             {activityEvents.map((evt) => (
               <div key={evt.id} className={cn('activity-item', `activity-item--${evt.kind}`)}>
-                <span className="activity-icon">
-                  {evt.kind === 'joined' && '+'}
-                  {evt.kind === 'returned' && '↑'}
-                  {evt.kind === 'left' && '↓'}
-                  {evt.kind === 'ports' && '⬡'}
-                  {evt.kind === 'anomaly' && '!'}
-                </span>
+                <span className="activity-icon">{activityIcon[evt.kind]}</span>
                 <span className="activity-text">
                   <span className="activity-label">{evt.label}</span>
-                  {evt.kind === 'joined' && ' joined'}
-                  {evt.kind === 'returned' && ' came back'}
-                  {evt.kind === 'left' && ' went offline'}
-                  {evt.kind === 'ports' && <> ports {evt.detail}</>}
-                  {evt.kind === 'anomaly' && ' flagged'}
+                  {' '}{activityVerb[evt.kind]}{evt.detail ? ` ${evt.detail}` : ''}
                 </span>
                 <span className="activity-ago">{formatAgo(evt.ts)}</span>
               </div>
@@ -512,6 +589,7 @@ export default function App() {
   const [sightingsById, setSightingsById] = useState<Record<string, SightingRecord[]>>({});
   const [loadingSightingsId, setLoadingSightingsId] = useState<string | null>(null);
   const [historyExpandedById, setHistoryExpandedById] = useState<Record<string, boolean>>({});
+  const [sparkTooltip, setSparkTooltip] = useState<{ deviceId: string; idx: number } | null>(null);
   const [keyDrafts, setKeyDrafts] = useState<Record<ProviderId, string>>({
     openai: '',
     gemini: '',
@@ -827,7 +905,7 @@ export default function App() {
     let cancelled = false;
     setLoadingSightingsId(expandedDeviceId);
     window.aneti
-      .listSightings(expandedDeviceId, 20)
+      .listSightings(expandedDeviceId, 30)
       .then((rows) => {
         if (cancelled) return;
         if (Array.isArray(rows)) {
@@ -1561,125 +1639,142 @@ export default function App() {
                                   {device.label || 'Not set'}
                                 </button>
                               </div>
-                              <div className="detail-row">
-                                <div className="detail-label">IP Address</div>
-                                <button
-                                  type="button"
-                                  onClick={() => copyText(device.ip)}
-                                  className="detail-value detail-value--copy"
-                                  title="Click to copy"
-                                >
-                                  {device.ip}
-                                </button>
-                              </div>
-                              <div className="detail-row">
-                                <div className="detail-label">MAC Address</div>
-                                <button
-                                  type="button"
-                                  onClick={() => copyText(device.mac || '')}
-                                  className="detail-value detail-value--copy"
-                                  title="Click to copy"
-                                >
-                                  {device.mac || 'Unknown'}
-                                </button>
-                              </div>
-                              <div className="detail-row">
-                                <div className="detail-label">Hostname</div>
-                                <button
-                                  type="button"
-                                  onClick={() => copyText(device.hostname || '')}
-                                  className="detail-value detail-value--copy"
-                                  title="Click to copy"
-                                >
-                                  {device.hostname || 'Unknown'}
-                                </button>
-                              </div>
-                              <div className="detail-row">
-                                <div className="detail-label">mDNS Name</div>
-                                <button
-                                  type="button"
-                                  onClick={() => copyText(device.mdnsName || '')}
-                                  className="detail-value detail-value--copy"
-                                  title="Click to copy"
-                                >
-                                  {device.mdnsName || 'Unknown'}
-                                </button>
-                              </div>
-                              <div className="detail-row">
-                                <div className="detail-label">Vendor</div>
-                                <button
-                                  type="button"
-                                  onClick={() => copyText(device.vendor || '')}
-                                  className="detail-value detail-value--copy"
-                                  title="Click to copy"
-                                >
-                                  {device.vendor || 'Unknown'}
-                                </button>
-                              </div>
-                              <div className="detail-row">
-                                <div className="detail-label">Open Ports</div>
-                                <button
-                                  type="button"
-                                  onClick={() => copyText(device.openPorts?.join(', ') || '')}
-                                  className="detail-value detail-value--copy"
-                                  title="Click to copy"
-                                >
-                                  {device.openPorts && device.openPorts.length > 0
-                                    ? device.openPorts.join(', ')
-                                    : 'None detected'}
-                                </button>
-                              </div>
-                              <div className="detail-row">
-                                <div className="detail-label">First Seen</div>
-                                <button
-                                  type="button"
-                                  onClick={() => copyText(formatDateTime(device.firstSeen))}
-                                  className="detail-value detail-value--copy"
-                                  title="Click to copy"
-                                >
-                                  {formatDateTime(device.firstSeen)}
-                                </button>
-                              </div>
-                              <div className="detail-row">
-                                <div className="detail-label">Last Seen</div>
-                                <button
-                                  type="button"
-                                  onClick={() => copyText(formatDateTime(device.lastSeen))}
-                                  className="detail-value detail-value--copy"
-                                  title="Click to copy"
-                                >
-                                  {formatDateTime(device.lastSeen)}
-                                </button>
-                              </div>
-                              <div className="detail-row">
-                                <div className="detail-label">Security</div>
-                                <div className="detail-value">
-                                  {isTrusted ? (
-                                    <span className="device-tag device-tag--trusted">
-                                      <CircleCheck className="device-tag__icon" />
-                                      trusted
-                                    </span>
-                                  ) : (
-                                    <span className="device-tag device-tag--security-anomaly">untrusted</span>
-                                  )}
+                              <div className="detail-row-pair">
+                                <div className="detail-row">
+                                  <div className="detail-label">IP Address</div>
+                                  <button
+                                    type="button"
+                                    onClick={() => copyText(device.ip)}
+                                    className="detail-value detail-value--copy"
+                                    title="Click to copy"
+                                  >
+                                    {device.ip}
+                                  </button>
+                                </div>
+                                <div className="detail-row">
+                                  <div className="detail-label">MAC Address</div>
+                                  <button
+                                    type="button"
+                                    onClick={() => copyText(device.mac || '')}
+                                    className="detail-value detail-value--copy"
+                                    title="Click to copy"
+                                  >
+                                    {device.mac || 'Unknown'}
+                                  </button>
                                 </div>
                               </div>
-                              <div className="detail-row">
-                                <div className="detail-label">Alerts</div>
-                                <div className="detail-value">
-                                  {isMuted ? (
-                                    <span className="device-tag device-tag--muted">
-                                      <BellOff className="device-tag__icon" />
-                                      muted
-                                    </span>
-                                  ) : (
-                                    <span className="device-tag device-tag--ok">active</span>
-                                  )}
+                              <div className="detail-row-pair">
+                                <div className="detail-row">
+                                  <div className="detail-label">Hostname</div>
+                                  <button
+                                    type="button"
+                                    onClick={() => copyText(device.hostname || '')}
+                                    className="detail-value detail-value--copy"
+                                    title="Click to copy"
+                                  >
+                                    {device.hostname || 'Unknown'}
+                                  </button>
+                                </div>
+                                <div className="detail-row">
+                                  <div className="detail-label">mDNS Name</div>
+                                  <button
+                                    type="button"
+                                    onClick={() => copyText(device.mdnsName || '')}
+                                    className="detail-value detail-value--copy"
+                                    title="Click to copy"
+                                  >
+                                    {device.mdnsName || 'Unknown'}
+                                  </button>
+                                </div>
+                              </div>
+                              <div className="detail-row-pair">
+                                <div className="detail-row">
+                                  <div className="detail-label">Vendor</div>
+                                  <button
+                                    type="button"
+                                    onClick={() => copyText(device.vendor || '')}
+                                    className="detail-value detail-value--copy"
+                                    title="Click to copy"
+                                  >
+                                    {device.vendor || 'Unknown'}
+                                  </button>
+                                </div>
+                                <div className="detail-row">
+                                  <div className="detail-label">Open Ports</div>
+                                  <button
+                                    type="button"
+                                    onClick={() => copyText(device.openPorts?.join(', ') || '')}
+                                    className="detail-value detail-value--copy"
+                                    title="Click to copy"
+                                  >
+                                    {device.openPorts && device.openPorts.length > 0
+                                      ? device.openPorts.join(', ')
+                                      : 'None detected'}
+                                  </button>
+                                </div>
+                              </div>
+                              <div className="detail-row-pair">
+                                <div className="detail-row">
+                                  <div className="detail-label">First Seen</div>
+                                  <button
+                                    type="button"
+                                    onClick={() => copyText(formatDateTime(device.firstSeen))}
+                                    className="detail-value detail-value--copy"
+                                    title="Click to copy"
+                                  >
+                                    {formatDateTime(device.firstSeen)}
+                                  </button>
+                                </div>
+                                <div className="detail-row">
+                                  <div className="detail-label">Last Seen</div>
+                                  <button
+                                    type="button"
+                                    onClick={() => copyText(formatDateTime(device.lastSeen))}
+                                    className="detail-value detail-value--copy"
+                                    title="Click to copy"
+                                  >
+                                    {formatDateTime(device.lastSeen)}
+                                  </button>
+                                </div>
+                              </div>
+                              <div className="detail-row-pair">
+                                <div className="detail-row">
+                                  <div className="detail-label">Security</div>
+                                  <div className="detail-value">
+                                    {isTrusted ? (
+                                      <span className="device-tag device-tag--trusted">
+                                        <CircleCheck className="device-tag__icon" />
+                                        trusted
+                                      </span>
+                                    ) : (
+                                      <span className="device-tag device-tag--security-anomaly">untrusted</span>
+                                    )}
+                                  </div>
+                                </div>
+                                <div className="detail-row">
+                                  <div className="detail-label">Alerts</div>
+                                  <div className="detail-value">
+                                    {isMuted ? (
+                                      <span className="device-tag device-tag--muted">
+                                        <BellOff className="device-tag__icon" />
+                                        muted
+                                      </span>
+                                    ) : (
+                                      <span className="device-tag device-tag--ok">active</span>
+                                    )}
+                                  </div>
                                 </div>
                               </div>
                               <div className="detail-history">
                                 <div className="detail-history-header">
-                                  <div className="detail-label">Recent sightings</div>
+                                  <div>
+                                    <div className="detail-label">Recent sightings</div>
+                                    {sightingsById[device.id]?.length && (
+                                      <div className="detail-spark-subtitle">
+                                        Ping latency over last {sightingsById[device.id].length} scans
+                                      </div>
+                                    )}
+                                  </div>
                                   <button
                                     type="button"
                                     className="detail-action detail-action--ghost"
@@ -1688,66 +1783,138 @@ export default function App() {
                                     {historyExpandedById[device.id] ? 'Hide' : 'Show'}
                                   </button>
                                 </div>
-                                {historyExpandedById[device.id] && (
-                                  <>
-                                    {loadingSightingsId === device.id && (
-                                      <div className="detail-history-empty">Loading…</div>
-                                    )}
-                                    {loadingSightingsId !== device.id &&
-                                      (sightingsById[device.id]?.length ? (
-                                        <>
-                                          <div className="detail-history-spark">
-                                            {sightingsById[device.id]
-                                              ?.slice(0, 16)
-                                              .map((sighting) => {
-                                                const status =
-                                                  sighting.status ??
-                                                  (sighting.latencyMs ? 'online' : 'offline');
-                                                return (
-                                                  <span
-                                                    key={sighting.id}
-                                                    className={cn(
-                                                      'detail-history-dot',
-                                                      status === 'online'
-                                                        ? 'detail-history-dot--online'
-                                                        : 'detail-history-dot--offline'
-                                                    )}
-                                                    title={`${formatTimestamp(sighting.seenAt)} · ${status}`}
-                                                  />
-                                                );
-                                              })}
+                                {/* Sparkline always visible */}
+                                {loadingSightingsId === device.id && (
+                                  <div className="detail-history-empty">Loading…</div>
+                                )}
+                                {loadingSightingsId !== device.id && (sightingsById[device.id]?.length ? (
+                                  (() => {
+                                    const ordered = [...(sightingsById[device.id] ?? [])].reverse();
+                                    const latencies = ordered.map((s) => {
+                                      const st = s.status ?? (s.latencyMs ? 'online' : 'offline');
+                                      return st === 'online' ? (s.latencyMs ?? 0) : 0;
+                                    });
+                                    const statuses = ordered.map((s) => s.status ?? (s.latencyMs ? 'online' : 'offline'));
+                                    const onlineLatencies = latencies.filter((v) => v > 0);
+                                    const rawMin = onlineLatencies.length ? Math.min(...onlineLatencies) : 0;
+                                    const rawMax = Math.max(1, ...latencies);
+                                    const range = rawMax - rawMin;
+                                    const pad10 = range * 0.1;
+                                    const minLat = Math.max(0, rawMin - pad10);
+                                    const maxLat = rawMax + pad10;
+                                    const spW = 400;
+                                    const spH = 48;
+                                    const spPadX = 4;
+                                    const spPadY = 4;
+                                    const spChartW = spW - spPadX * 2;
+                                    const spChartH = spH - spPadY * 2;
+                                    const line = sparkLinePath(latencies, minLat, maxLat, spChartW, spChartH, spPadX, spPadY);
+                                    const area = sparkAreaPath(latencies, minLat, maxLat, spChartW, spChartH, spPadX, spPadY);
+                                    const step = latencies.length > 1 ? spChartW / (latencies.length - 1) : 0;
+                                    const offlineSpans: { x1: number; x2: number; startIdx: number }[] = [];
+                                    {
+                                      let runStart = -1;
+                                      for (let i = 0; i <= statuses.length; i++) {
+                                        if (i < statuses.length && statuses[i] === 'offline') {
+                                          if (runStart === -1) runStart = i;
+                                        } else if (runStart !== -1) {
+                                          const x1 = Math.max(spPadX, spPadX + step * runStart - step * 0.5);
+                                          const x2 = Math.min(spPadX + spChartW, spPadX + step * (i - 1) + step * 0.5);
+                                          offlineSpans.push({ x1, x2, startIdx: runStart });
+                                          runStart = -1;
+                                        }
+                                      }
+                                    }
+                                    return ordered.length >= 1 ? (
+                                      <div className="detail-spark-container">
+                                        <svg viewBox={`0 0 ${spW} ${spH}`} className="detail-spark-svg" preserveAspectRatio="none">
+                                          <defs>
+                                            <linearGradient id={`spark-fill-${device.id}`} x1="0" y1="0" x2="0" y2="1">
+                                              <stop offset="0%" stopColor="rgba(var(--accent-400-rgb), 0.25)" />
+                                              <stop offset="100%" stopColor="rgba(var(--accent-400-rgb), 0.02)" />
+                                            </linearGradient>
+                                          </defs>
+                                          {offlineSpans.map((span) => (
+                                            <rect key={`offline-${span.startIdx}`} x={span.x1} y={spPadY} width={span.x2 - span.x1} height={spChartH} className="detail-spark-offline-zone" />
+                                          ))}
+                                          <path d={area} fill={`url(#spark-fill-${device.id})`} />
+                                          <path d={line} className="detail-spark-line" />
+                                          {ordered.map((s, i) => {
+                                            const st = statuses[i];
+                                            const cx = spPadX + step * i;
+                                            if (st === 'offline') {
+                                              const cy = spChartH + spPadY;
+                                              return <circle key={s.id} cx={cx} cy={cy} r={3} className="detail-spark-dot--offline" />;
+                                            }
+                                            const cy = sparkNormalize(latencies[i], minLat, maxLat, spChartH, spPadY);
+                                            return <circle key={s.id} cx={cx} cy={cy} r={2} className="detail-spark-dot" />;
+                                          })}
+                                          {ordered.map((s, i) => {
+                                            const st = statuses[i];
+                                            const cx = spPadX + step * i;
+                                            const cy = st === 'offline'
+                                              ? spChartH + spPadY
+                                              : sparkNormalize(latencies[i], minLat, maxLat, spChartH, spPadY);
+                                            return (
+                                              <circle
+                                                key={`hover-${s.id}`}
+                                                cx={cx} cy={cy} r={8}
+                                                fill="transparent"
+                                                className="detail-spark-hit"
+                                                onMouseEnter={() => setSparkTooltip({ deviceId: device.id, idx: i })}
+                                                onMouseLeave={() => setSparkTooltip(null)}
+                                              />
+                                            );
+                                          })}
+                                        </svg>
+                                        {sparkTooltip?.deviceId === device.id && sparkTooltip.idx < ordered.length && (
+                                          <div
+                                            className="spark-tooltip"
+                                            style={{ left: `${(sparkTooltip.idx / Math.max(ordered.length - 1, 1)) * 100}%` }}
+                                          >
+                                            {statuses[sparkTooltip.idx] === 'offline'
+                                              ? `Offline · ${formatTimestamp(ordered[sparkTooltip.idx].seenAt)}`
+                                              : `${latencies[sparkTooltip.idx]}ms · ${formatTimestamp(ordered[sparkTooltip.idx].seenAt)}`}
                                           </div>
-                                          <div className="detail-history-list">
-                                            {sightingsById[device.id]?.map((sighting) => {
-                                              const status =
-                                                sighting.status ??
-                                                (sighting.latencyMs ? 'online' : 'offline');
-                                              return (
-                                                <div key={sighting.id} className="detail-history-row">
-                                                  <div>{formatTimestamp(sighting.seenAt)}</div>
-                                                  <div className="detail-history-ip">{sighting.ip}</div>
-                                                  <div className="detail-history-latency">
-                                                    {sighting.latencyMs ? `${sighting.latencyMs} ms` : '—'}
-                                                  </div>
-                                                  <div
-                                                    className={cn(
-                                                      'detail-history-status',
-                                                      status === 'online'
-                                                        ? 'detail-history-status--online'
-                                                        : 'detail-history-status--offline'
-                                                    )}
-                                                  >
-                                                    {status}
-                                                  </div>
-                                                </div>
-                                              );
-                                            })}
+                                        )}
+                                        <div className="spark-legend">
+                                          <span><span className="spark-legend-dot spark-legend-dot--online" />online</span>
+                                          <span><span className="spark-legend-dot spark-legend-dot--offline" />offline</span>
+                                        </div>
+                                      </div>
+                                    ) : null;
+                                  })()
+                                ) : loadingSightingsId !== device.id ? (
+                                  <div className="detail-history-empty">No sightings yet.</div>
+                                ) : null)}
+                                {/* History table behind toggle */}
+                                {historyExpandedById[device.id] && sightingsById[device.id]?.length && (
+                                  <div className="detail-history-list">
+                                    {sightingsById[device.id]?.map((sighting) => {
+                                      const status =
+                                        sighting.status ??
+                                        (sighting.latencyMs ? 'online' : 'offline');
+                                      return (
+                                        <div key={sighting.id} className="detail-history-row">
+                                          <div>{formatTimestamp(sighting.seenAt)}</div>
+                                          <div className="detail-history-ip">{sighting.ip}</div>
+                                          <div className="detail-history-latency">
+                                            {sighting.latencyMs ? `${sighting.latencyMs} ms` : '—'}
                                           </div>
-                                        </>
-                                      ) : (
-                                        <div className="detail-history-empty">No sightings yet.</div>
-                                      ))}
-                                  </>
+                                          <div
+                                            className={cn(
+                                              'detail-history-status',
+                                              status === 'online'
+                                                ? 'detail-history-status--online'
+                                                : 'detail-history-status--offline'
+                                            )}
+                                          >
+                                            {status}
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
                                 )}
                               </div>
                               <div className="detail-edit">

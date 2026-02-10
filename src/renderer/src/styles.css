@@ -161,6 +161,17 @@ button {
 .detail-row:last-child {
   border-bottom: none;
 }
+.detail-row-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 1rem;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+  padding: 0.35rem 0;
+}
+.detail-row-pair .detail-row {
+  border-bottom: none;
+  padding: 0;
+}
 .detail-label {
   font-size: 0.75rem;
   text-transform: uppercase;
@@ -471,6 +482,7 @@ button {
   .device-card .text-xs .device-tag ~ .device-tag { display: none; }
 
   /* -- Expanded panel: text wrapping -- */
+  .detail-row-pair { grid-template-columns: 1fr; }
   .detail-row { gap: 0.5rem; }
   .detail-value,
   .detail-value--copy {
@@ -552,13 +564,34 @@ button {
 .pulse-mini-label--accent {
   color: rgba(var(--accent-300-rgb), 0.84);
 }
+.activity-chart {
+  width: 100%;
+  height: 2.8rem;
+  display: block;
+  margin-top: 0.3rem;
+  border-radius: 4px;
+  background: rgba(148, 163, 184, 0.04);
+}
+.activity-bar {
+  transition: height 0.4s ease-out, y 0.4s ease-out;
+}
+.activity-bar--joined  { fill: rgba(var(--accent-400-rgb), 0.6); }
+.activity-bar--returned { fill: rgba(34, 197, 94, 0.6); }
+.activity-bar--left    { fill: rgba(148, 163, 184, 0.35); }
+.activity-bar--ports   { fill: rgba(56, 189, 248, 0.6); }
+.activity-bar--anomaly { fill: rgba(248, 113, 113, 0.65); }
+.activity-chart-now {
+  stroke: rgba(var(--accent-400-rgb), 0.3);
+  stroke-width: 1;
+  stroke-dasharray: 2 2;
+}
 .activity-feed {
   display: flex;
   flex-direction: column;
   gap: 0;
   margin-top: 0.35rem;
   overflow-y: auto;
-  max-height: 150px;
+  max-height: 110px;
   scrollbar-width: thin;
   scrollbar-color: rgba(148, 163, 184, 0.15) transparent;
   mask-image: linear-gradient(to bottom, #000 80%, transparent 100%);
@@ -701,25 +734,75 @@ button {
   justify-content: space-between;
   gap: 0.75rem;
 }
-.detail-history-spark {
+.detail-spark-svg {
+  width: 100%;
+  height: 3rem;
+  display: block;
   margin-top: 0.4rem;
+}
+.detail-spark-line {
+  fill: none;
+  stroke: rgb(var(--accent-400-rgb));
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.detail-spark-dot {
+  fill: rgb(var(--accent-400-rgb));
+  opacity: 0.7;
+}
+.detail-spark-dot--offline {
+  fill: #f87171;
+}
+.detail-spark-offline-zone {
+  fill: #f87171;
+  opacity: 0.10;
+}
+.detail-spark-subtitle {
+  font-size: 0.65rem;
+  color: rgba(148, 163, 184, 0.45);
+  margin-top: 0.1rem;
+}
+.detail-spark-container {
+  position: relative;
+}
+.spark-tooltip {
+  position: absolute;
+  top: -1.4rem;
+  transform: translateX(-50%);
+  background: rgba(15, 23, 42, 0.95);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 0.35rem;
+  padding: 0.15rem 0.45rem;
+  font-size: 0.68rem;
+  color: rgba(226, 232, 240, 0.9);
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 10;
+}
+.detail-spark-hit {
+  cursor: crosshair;
+}
+.spark-legend {
   display: flex;
-  gap: 0.3rem;
-  flex-wrap: wrap;
+  gap: 0.75rem;
+  font-size: 0.65rem;
+  color: rgba(148, 163, 184, 0.5);
+  margin-top: 0.25rem;
 }
-.detail-history-dot {
-  width: 0.5rem;
-  height: 0.5rem;
-  border-radius: 9999px;
-  background: rgba(148, 163, 184, 0.4);
+.spark-legend-dot {
+  display: inline-block;
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  margin-right: 0.25rem;
+  vertical-align: middle;
 }
-.detail-history-dot--online {
-  background: rgba(148, 163, 184, 0.85);
-  box-shadow: none;
+.spark-legend-dot--online {
+  background: rgb(var(--accent-400-rgb));
 }
-.detail-history-dot--offline {
-  background: rgba(148, 163, 184, 0.85);
-  box-shadow: none;
+.spark-legend-dot--offline {
+  background: #f87171;
 }
 .detail-history-list {
   margin-top: 0.4rem;
