@@ -13,11 +13,13 @@ import {
   Radar,
   RefreshCw,
   Router,
+  Search,
   Server,
   Settings,
   ShieldAlert,
   ShieldCheck,
   Sparkles,
+  X,
   Zap,
 } from 'lucide-react';
 import { ToastContainer, useToast } from './components/Toast';
@@ -604,6 +606,7 @@ export default function App() {
   const [savingAlertPrefs, setSavingAlertPrefs] = useState(false);
   const [savingMutedDeviceId, setSavingMutedDeviceId] = useState<string | null>(null);
   const [savingTrustedDeviceId, setSavingTrustedDeviceId] = useState<string | null>(null);
+  const [deviceFilter, setDeviceFilter] = useState('');
   const [wakingDeviceId, setWakingDeviceId] = useState<string | null>(null);
   const [sendingTestNotification, setSendingTestNotification] = useState(false);
   const [savingIntegration, setSavingIntegration] = useState(false);
@@ -956,6 +959,15 @@ export default function App() {
       return ordered;
     });
   }, [devices, expandedDeviceId]);
+
+  const filteredDevices = useMemo(() => {
+    const q = deviceFilter.trim().toLowerCase();
+    if (!q) return renderDevices;
+    return renderDevices.filter((d) => {
+      const fields = [d.label, d.ip, d.mac, d.hostname, d.mdnsName, d.vendor];
+      return fields.some((f) => f?.toLowerCase().includes(q));
+    });
+  }, [renderDevices, deviceFilter]);
 
   const offlineCount = devices.length - onlineCount;
   const avgLatency = useMemo(() => {
@@ -1532,6 +1544,25 @@ export default function App() {
                   </div>
                 </div>
 
+                {scanStatus !== 'scanning' && renderDevices.length > 0 && (
+                  <div className="device-filter mt-4">
+                    <Search className="device-filter__icon" />
+                    <input
+                      className="device-filter__input"
+                      type="text"
+                      placeholder="Filter by name, IP, MAC, vendor…"
+                      value={deviceFilter}
+                      onChange={(e) => setDeviceFilter(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Escape') setDeviceFilter(''); }}
+                    />
+                    {deviceFilter && (
+                      <button className="device-filter__clear" onClick={() => setDeviceFilter('')}>
+                        <X className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                )}
+
                 <div className="mt-6 space-y-3">
                   {scanStatus === 'scanning' &&
                     Array.from({ length: 4 }).map((_, index) => (
@@ -1553,8 +1584,19 @@ export default function App() {
                       </div>
                     ))}
 
+                  {scanStatus !== 'scanning' && filteredDevices.length === 0 && deviceFilter.trim() && (
+                    <div className="device-filter-empty">
+                      <span className="text-sm text-white/50">
+                        No devices match &ldquo;{deviceFilter.trim()}&rdquo;
+                      </span>
+                      <button className="device-filter-empty__clear" onClick={() => setDeviceFilter('')}>
+                        Clear filter
+                      </button>
+                    </div>
+                  )}
+
                   {scanStatus !== 'scanning' &&
-                    renderDevices.map((device) => {
+                    filteredDevices.map((device) => {
                       const isExpanded = expandedDeviceId === device.id;
                       const isMuted = (settings?.alerts?.mutedDeviceIds ?? []).includes(device.id);
                       const isTrusted = (settings?.security?.trustedDeviceIds ?? []).includes(device.id);

@@ -462,6 +462,81 @@ button {
   color: rgba(var(--line-purple), 0.85);
   background: rgba(var(--line-purple), 0.16);
 }
+
+/* Device filter bar */
+.device-filter {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.device-filter:focus-within {
+  border-color: rgba(56, 189, 248, 0.5);
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.15);
+}
+.device-filter__icon {
+  width: 1rem;
+  height: 1rem;
+  color: rgba(255, 255, 255, 0.35);
+  flex-shrink: 0;
+  transition: color 0.2s;
+}
+.device-filter:focus-within .device-filter__icon {
+  color: rgb(56, 189, 248);
+}
+.device-filter__input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #f8fafc;
+  font: inherit;
+  font-size: 0.875rem;
+  min-width: 0;
+}
+.device-filter__input::placeholder {
+  color: rgba(255, 255, 255, 0.3);
+}
+.device-filter__clear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.2rem;
+  border-radius: 9999px;
+  color: rgba(255, 255, 255, 0.4);
+  transition: color 0.15s, background 0.15s;
+}
+.device-filter__clear:hover {
+  color: #f87171;
+  background: rgba(248, 113, 113, 0.15);
+}
+
+/* Device filter empty state */
+.device-filter-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 2rem 1rem;
+  border: 1px dashed rgba(255, 255, 255, 0.15);
+  border-radius: 1rem;
+}
+.device-filter-empty__clear {
+  font-size: 0.75rem;
+  padding: 0.3rem 0.85rem;
+  border-radius: 9999px;
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  color: rgb(56, 189, 248);
+  transition: background 0.15s;
+}
+.device-filter-empty__clear:hover {
+  background: rgba(56, 189, 248, 0.15);
+}
+
 @media (max-width: 640px) {
   .pulse-kicker {
     display: none;
